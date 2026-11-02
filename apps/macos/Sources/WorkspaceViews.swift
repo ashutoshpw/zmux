@@ -2,10 +2,10 @@ import AppKit
 
 @MainActor
 enum ZmuxPalette {
-    static let window = NSColor(calibratedWhite: 0.055, alpha: 1)
-    static let sidebar = NSColor(calibratedWhite: 0.075, alpha: 1)
-    static let terminal = NSColor(calibratedRed: 24 / 255, green: 24 / 255, blue: 26 / 255, alpha: 1)
-    static let chrome = NSColor(calibratedWhite: 0.085, alpha: 1)
+    static let window = NSColor(srgbRed: 17 / 255, green: 18 / 255, blue: 20 / 255, alpha: 1)
+    static let sidebar = NSColor(srgbRed: 17 / 255, green: 18 / 255, blue: 20 / 255, alpha: 1)
+    static let terminal = NSColor(srgbRed: 23 / 255, green: 24 / 255, blue: 27 / 255, alpha: 1)
+    static let chrome = NSColor(srgbRed: 20 / 255, green: 21 / 255, blue: 23 / 255, alpha: 1)
     static let separator = NSColor(calibratedWhite: 1, alpha: 0.085)
     static let selection = NSColor(calibratedWhite: 0.14, alpha: 1)
     static let selectionBorder = NSColor(calibratedWhite: 1, alpha: 0.05)
@@ -109,9 +109,140 @@ struct WorkspaceSidebarOrderState {
 }
 
 @MainActor
+private enum NativeSidebarRowClickDiagnostic {
+    private struct Event: Encodable {
+        let scope = "native_sidebar_row_click"
+        let phase: String
+        let workspaceID: UInt64
+        let mappedWorkspaceID: UInt64?
+        let mappedIDMatches: Bool?
+        let rowIdentity: String
+        let rowRevision: UInt64?
+        let currentRevision: UInt64?
+        let parentClass: String
+        let arrangedMember: Bool
+        let rowWindowPresent: Bool
+        let rowWindowNumber: Int?
+        let eventWindowNumber: Int?
+        let eventMatchesRowWindow: Bool?
+        let pointInWindow: [Double]?
+        let frame: [Double]
+        let bounds: [Double]
+        let visibleRect: [Double]
+        let hitClass: String
+        let hitRowIdentity: String?
+        let hitIsCurrentRow: Bool
+        let keyWindow: Bool
+        let mainWindow: Bool
+        let appActive: Bool
+        let appKeyWindow: Bool
+        let appMainWindow: Bool
+        let attachedSheet: Bool
+        let attachedSheetClass: String
+        let activeSheet: Bool
+        let activeModalWindow: Bool
+        let activeModalClass: String
+        let targetClass: String
+        let action: String
+        let click: Bool?
+        let actionDispatched: Bool?
+        let enqueueOutcome: String?
+    }
+
+    private static var emittedCount = 0
+    private static let maximumEvents = 32
+    private static let maximumRecordBytes = 2048
+    private static let enabled: Bool = {
+        guard let nonce = ProcessInfo.processInfo.environment["ZMUX_SIDEBAR_NONCE"],
+              UUID(uuidString: nonce) != nil else { return false }
+        return true
+    }()
+
+    static func record(
+        row: WorkspaceRowView,
+        phase: String,
+        currentRevision: UInt64?,
+        mappedWorkspaceID: UInt64?,
+        enqueueOutcome: String?,
+        click: Bool?,
+        actionDispatched: Bool?,
+        event: NSEvent?
+    ) {
+        guard enabled, emittedCount < maximumEvents else { return }
+        emittedCount += 1
+
+        let window = row.window
+        let parent = row.superview
+        let sidebar = parent as? WorkspaceSidebarList
+        let arrangedMember = sidebar?.arrangedSubviews.contains(where: { $0 === row }) ?? false
+        let attachedSheet = window?.attachedSheet
+        let modalWindow = NSApp.modalWindow
+        let activeSheet = attachedSheet.map { NSApp.keyWindow === $0 || modalWindow === $0 } ?? false
+        let mouseEvent = event.map { $0.type == .leftMouseDown || $0.type == .leftMouseUp } ?? false
+        let eventMatchesRowWindow: Bool?
+        if mouseEvent, let event, let window {
+            eventMatchesRowWindow = event.windowNumber == window.windowNumber
+        } else {
+            eventMatchesRowWindow = nil
+        }
+        let hit: NSView?
+        if mouseEvent, let event, let window, let content = window.contentView {
+            hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
+        } else {
+            hit = nil
+        }
+        let record = Event(
+            phase: phase,
+            workspaceID: row.workspaceID,
+            mappedWorkspaceID: mappedWorkspaceID,
+            mappedIDMatches: mappedWorkspaceID.map { $0 == row.workspaceID },
+            rowIdentity: row.nativeSmokeRowIdentity,
+            rowRevision: row.workspaceModelRevision,
+            currentRevision: currentRevision,
+            parentClass: parent.map { NSStringFromClass(type(of: $0)) } ?? "nil",
+            arrangedMember: arrangedMember,
+            rowWindowPresent: window != nil,
+            rowWindowNumber: window?.windowNumber,
+            eventWindowNumber: mouseEvent ? event?.windowNumber : nil,
+            eventMatchesRowWindow: eventMatchesRowWindow,
+            pointInWindow: mouseEvent ? event.map { [Double($0.locationInWindow.x), Double($0.locationInWindow.y)] } : nil,
+            frame: [Double(row.frame.origin.x), Double(row.frame.origin.y), Double(row.frame.width), Double(row.frame.height)],
+            bounds: [Double(row.bounds.origin.x), Double(row.bounds.origin.y), Double(row.bounds.width), Double(row.bounds.height)],
+            visibleRect: [Double(row.visibleRect.origin.x), Double(row.visibleRect.origin.y), Double(row.visibleRect.width), Double(row.visibleRect.height)],
+            hitClass: hit.map { NSStringFromClass(type(of: $0)) } ?? (mouseEvent ? "none" : "not_mouse_event"),
+            hitRowIdentity: (hit as? WorkspaceRowView)?.nativeSmokeRowIdentity,
+            hitIsCurrentRow: hit === row,
+            keyWindow: window?.isKeyWindow ?? false,
+            mainWindow: window?.isMainWindow ?? false,
+            appActive: NSApp.isActive,
+            appKeyWindow: NSApp.keyWindow === window,
+            appMainWindow: NSApp.mainWindow === window,
+            attachedSheet: attachedSheet != nil,
+            attachedSheetClass: attachedSheet.map { NSStringFromClass(type(of: $0)) } ?? "nil",
+            activeSheet: activeSheet,
+            activeModalWindow: modalWindow != nil,
+            activeModalClass: modalWindow.map { NSStringFromClass(type(of: $0)) } ?? "nil",
+            targetClass: row.target.map { NSStringFromClass(type(of: $0)) } ?? "nil",
+            action: row.action.map { NSStringFromSelector($0) } ?? "nil",
+            click: click,
+            actionDispatched: actionDispatched,
+            enqueueOutcome: enqueueOutcome
+        )
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        encoder.outputFormatting = [.sortedKeys]
+        guard var line = try? encoder.encode(record), line.count <= maximumRecordBytes else { return }
+        line.append(0x0A)
+        FileHandle.standardError.write(line)
+    }
+}
+
+@MainActor
 final class WorkspaceRowView: NSControl, NSDraggingSource {
     private static let dragType = NSPasteboard.PasteboardType("app.zmux.workspace-order")
     let workspaceID: UInt64
+    fileprivate let nativeSmokeRowIdentity = UUID().uuidString.lowercased()
+    private(set) var workspaceModelRevision: UInt64?
     var onMetadata: (@MainActor (NSView) -> Void)?
     weak var workspaceDragOwner: AnyObject?
     var workspaceOrderTarget: (@MainActor (UInt64) -> WorkspaceOrderTarget?)?
@@ -230,6 +361,31 @@ final class WorkspaceRowView: NSControl, NSDraggingSource {
 
     override var acceptsFirstResponder: Bool { true }
 
+    func setWorkspaceModelRevision(_ revision: UInt64) {
+        workspaceModelRevision = revision
+    }
+
+    func recordNativeSidebarSmokeClick(
+        phase: String,
+        currentRevision: UInt64? = nil,
+        mappedWorkspaceID: UInt64? = nil,
+        enqueueOutcome: String? = nil,
+        click: Bool? = nil,
+        actionDispatched: Bool? = nil,
+        event: NSEvent? = nil
+    ) {
+        NativeSidebarRowClickDiagnostic.record(
+            row: self,
+            phase: phase,
+            currentRevision: currentRevision,
+            mappedWorkspaceID: mappedWorkspaceID,
+            enqueueOutcome: enqueueOutcome,
+            click: click,
+            actionDispatched: actionDispatched,
+            event: event
+        )
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let hit = super.hitTest(point) else { return nil }
         return hit is NSButton ? hit : self
@@ -308,6 +464,7 @@ final class WorkspaceRowView: NSControl, NSDraggingSource {
         mouseDownWindow = window
         didBeginDrag = false
         activeDragTarget = workspaceOrderTarget?(workspaceID)
+        recordNativeSidebarSmokeClick(phase: "mouseDown", event: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -350,9 +507,13 @@ final class WorkspaceRowView: NSControl, NSDraggingSource {
             didBeginDrag = false
             activeDragTarget = nil
         }
-        guard isClick else { return }
+        guard isClick else {
+            recordNativeSidebarSmokeClick(phase: "mouseUp", click: false, actionDispatched: false, event: event)
+            return
+        }
         window?.makeFirstResponder(self)
-        if let action { sendAction(action, to: target) }
+        let dispatched = action.map { sendAction($0, to: target) } ?? false
+        recordNativeSidebarSmokeClick(phase: "mouseUp", click: true, actionDispatched: dispatched, event: event)
     }
 
     private func dragPreviewImage() -> NSImage? {

@@ -294,7 +294,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         cloudFooter.update(label: label, connected: connected)
     }
 
-    private func enqueue(_ command: UICommand) {
+    @discardableResult
+    private func enqueue(_ command: UICommand) -> Bool {
         coordinator.enqueue(command)
     }
 
@@ -564,6 +565,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }
             guard let down = event(.leftMouseDown), let up = event(.leftMouseUp) else {
                 throw BridgeFailure(message: "Could not construct native sidebar pointer event")
+            }
+            if let row = view as? WorkspaceRowView {
+                row.recordNativeSidebarSmokeClick(
+                    phase: "beforeClick",
+                    currentRevision: snapshot?.model.revision,
+                    mappedWorkspaceID: workspaceRows[row],
+                    event: down
+                )
             }
             // NSButton tracks synchronously until mouse-up; queue its real release first.
             NSApp.postEvent(up, atStart: true)
@@ -880,8 +889,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
 
         guard let owner = fixtureSnapshot.model.windows.first(where: { $0.id == claudeRecord.windowId }),
-              let otherWorkspaceID = owner.workspaceIds.first(where: { $0 != claudeRecord.workspaceId }),
-              let otherWorkspaceRow = workspaceRows.first(where: { $0.value == otherWorkspaceID })?.key else {
+              let otherWorkspaceID = owner.workspaceIds.first(where: { $0 != claudeRecord.workspaceId }) else {
             throw BridgeFailure(message: "Agent selection fixture has no different workspace to focus first")
         }
         guard let selectionBaseline = snapshot else { throw BridgeFailure(message: "Agent selection fixture lost its sidebar snapshot") }
@@ -963,6 +971,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             case "codex_local": target = codexRecord
             case "opencode_local": target = opencodeRecord
             default: throw BridgeFailure(message: "Native provider selection fixture has an unsupported provider")
+            }
+            guard let otherWorkspaceRow = workspaceRows.first(where: { $0.value == otherWorkspaceID })?.key,
+                  otherWorkspaceRow.workspaceID == otherWorkspaceID,
+                  workspaceRows[otherWorkspaceRow] == otherWorkspaceID,
+                  otherWorkspaceRow.window === window,
+                  workspaceList.arrangedSubviews.contains(where: { $0 === otherWorkspaceRow }) else {
+                throw BridgeFailure(message: "Other workspace row was rebuilt or is no longer mapped before its selection callback")
             }
             otherWorkspaceRow.scrollToVisible(otherWorkspaceRow.bounds)
             content.layoutSubtreeIfNeeded()
@@ -1386,6 +1401,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 if group.collapsed { continue }
             }
             let row = WorkspaceRowView(workspaceID: workspace.id)
+            row.setWorkspaceModelRevision(snapshot.model.revision)
             row.target = self
             row.action = #selector(workspaceSelected(_:))
             row.workspaceDragOwner = self
@@ -2350,7 +2366,20 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     @objc func workspaceSelected(_ sender: WorkspaceRowView) {
-        if let id = workspaceRows[sender] { selectWorkspace(id) }
+        let mappedWorkspaceID = workspaceRows[sender]
+        let outcome: String
+        if let mappedWorkspaceID {
+            outcome = selectWorkspace(mappedWorkspaceID) ? "accepted" : "rejected"
+        } else {
+            outcome = "unmapped"
+        }
+        sender.recordNativeSidebarSmokeClick(
+            phase: "callback",
+            currentRevision: snapshot?.model.revision,
+            mappedWorkspaceID: mappedWorkspaceID,
+            enqueueOutcome: outcome,
+            event: NSApp.currentEvent
+        )
     }
 
     private func selectWorkspaceNumber(_ digit: Int) {
@@ -2362,10 +2391,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         selectWorkspaceNumber(sender.tag)
     }
 
-    func selectWorkspace(_ id: UInt64) {
-        if snapshot?.model.workspaces.contains(where: { $0.id == id }) == true {
-            enqueue(.action("select_workspace", nil, nil, nil, id))
-        }
+    @discardableResult
+    func selectWorkspace(_ id: UInt64) -> Bool {
+        guard snapshot?.model.workspaces.contains(where: { $0.id == id }) == true else { return false }
+        return enqueue(.action("select_workspace", nil, nil, nil, id))
     }
 
     @objc func renameWorkspace() {

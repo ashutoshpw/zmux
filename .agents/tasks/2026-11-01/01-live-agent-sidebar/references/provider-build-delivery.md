@@ -2,60 +2,51 @@
 
 **Updated:** 2026-11-02
 
-**Source:** `983f426da15223dcb0da4912e6aee53a18616251`
+**Source:** `c787b1b155cb24fb817164e4a0dd66b1316dfa88`
 
 ## Latest exact-source result
 
-**BLOCKED: no accepted universal macOS app artifact exists for this source.** Both exact-source workflows failed the same macOS Codex provider-hook fixture with the newly surfaced `receive_timeout_setup/InvalidInput` class. Foundation Ubuntu, both Linux scheduler builds, and standalone Swift typechecking passed. Development packaging and packaged acceptance were skipped after the Rust-core gate failed. This is a source-level deadline-boundary failure, not an infrastructure failure; no same-source retry was started.
+**BLOCKED: no accepted universal macOS app artifact exists for this source.** Foundation Ubuntu passed, but Foundation macOS failed in the synthetic Codex foreign-thread notification check after its exact local terminal had attached and published a connected Idle baseline. The independent full macOS development workflow passed `scripts/check`, universal compilation, terminal-selection/browser-link acceptance and packaged native rendering, then failed the sidebar smoke before the provider-row selection loop. Only the candidate and failure-diagnostics artifacts were uploaded; final app upload was skipped. No same-source retry was started.
 
-- [Foundation checks run 41456641683](https://github.com/ashutoshpw/zmux/actions/runs/41456641683), source SHA `983f426da15223dcb0da4912e6aee53a18616251`.
-  - Ubuntu job [125314882092](https://github.com/ashutoshpw/zmux/actions/runs/41456641683/job/125314882092) passed.
-  - macOS job [125314881697](https://github.com/ashutoshpw/zmux/actions/runs/41456641683/job/125314881697) failed **Check existing Rust modules and foreign C ABI**. Full downloaded job log: `/tmp/zmux-provider-foundation-mac-983f426.log`.
-- [macOS development build run 41456641596](https://github.com/ashutoshpw/zmux/actions/runs/41456641596), same source SHA.
-  - Both Linux scheduler jobs and `swift-typecheck` passed.
-  - Development job [125316307081](https://github.com/ashutoshpw/zmux/actions/runs/41456641596/job/125316307081) failed **Validate Rust core and foreign ABI** on the same fixture. Full downloaded job log: `/tmp/zmux-provider-development-983f426.log`.
-  - Universal compilation, candidate retention, packaged terminal/native/sidebar checks, and downloadable development build upload were skipped. The artifact inventory contains only scheduler helpers and queue-layout evidence; no `zmux-macos-dev-universal-983f426da15223dcb0da4912e6aee53a18616251` artifact exists.
+- [Foundation checks run 41460747674](https://github.com/ashutoshpw/zmux/actions/runs/41460747674), source SHA `c787b1b155cb24fb817164e4a0dd66b1316dfa88`.
+  - Ubuntu job [125328831708](https://github.com/ashutoshpw/zmux/actions/runs/41460747674/job/125328831708) passed.
+  - macOS job [125328831202](https://github.com/ashutoshpw/zmux/actions/runs/41460747674/job/125328831202) failed **Check existing Rust modules and foreign C ABI**. Runner image was `macos-26-arm64` on macOS 26.6.2. Full downloaded log: `/tmp/zmux-provider-foundation-mac-c787b1b.raw`.
+- [macOS development build run 41460747813](https://github.com/ashutoshpw/zmux/actions/runs/41460747813), same source SHA.
+  - Both Linux scheduler jobs and `swift-typecheck` passed. The development runner image was `macos-15-arm64`.
+  - Development job [125330554189](https://github.com/ashutoshpw/zmux/actions/runs/41460747813/job/125330554189) passed `scripts/check`, universal app compilation, terminal-selection/browser-link acceptance and packaged app/native rendering. `Exercise native sidebar and system status menu` failed. Full downloaded log: `/tmp/zmux-provider-development-mac-c787b1b.log`.
+  - Candidate artifact [13149858349](https://github.com/ashutoshpw/zmux/actions/runs/41460747813/artifacts/13149858349) and diagnostics artifact [13150379365](https://github.com/ashutoshpw/zmux/actions/runs/41460747813/artifacts/13150379365) are not accepted delivery. The diagnostics archive was downloaded to `/tmp/zmux-provider-diagnostics-c787b1b`. The required `zmux-macos-dev-universal-c787b1b155cb24fb817164e4a0dd66b1316dfa88` final artifact was not uploaded.
 
 ## Failure diagnosis
 
-The primary failure is `automatic_local_codex_uses_its_exact_real_desktop_terminal_route`, whose child times out at `apps/cli/tests/provider_hooks.rs:139` with an empty provider snapshot. In both full macOS job logs, the bounded fixture terminal shows the synthetic daemon running and `CODEX_FIXTURE_READY`, followed by:
+There were two distinct hosted failures after the ingress repair; neither reports the prior `receive_timeout_setup/InvalidInput` class.
 
-```text
-zmux: provider ingress failure: receive_timeout_setup/InvalidInput
-zmux: provider event route was lost; activity remains Unknown
-zmux: Codex SessionStart tracking is not active; review the Zmux hook in /hooks. No lifecycle state is being inferred.
-```
+### Foundation macOS Codex fixture
 
-This class identifies receive-timeout setup in the local event reader as the
-failed operation. The code passed each remaining absolute budget to
-UnixStream::set_read_timeout. Rust rejects a zero timeout; equality at the
-deadline is a source-level route to InvalidInput. The hosted diagnostics did
-not record the supplied duration, so they do not independently prove that
-exact equality was the operating-system failure's cause. The current repair
-uses explicit nonblocking reads and poll under the same 200 ms deadline,
-including zero/expired-budget rejection, and removes per-byte receive-timeout
-configuration entirely. Native execution remains necessary to accept it.
+`automatic_local_codex_uses_its_exact_real_desktop_terminal_route` failed at `apps/cli/tests/provider_hooks.rs:1930` with `synthetic daemon did not send the foreign thread notification`. The parent had already observed `CODEX_FIXTURE_READY`, attached the SessionStart identity to the exact existing terminal and asserted a connected Idle baseline before writing `foreign-probe` at line 1927. It then waited three seconds for `foreign-ack`; that file was not created. The full job log contains the child panic and a later local-control `Broken pipe`, but no bounded fixture-terminal dump, ingress classification or watcher-attach error. Those are absent from this timeout branch, so this is not evidence of the old ingress failure or a failed initial attach.
 
-In `provider-synthetic-codex.py`, the fixture prints `CODEX_FIXTURE_READY` only after its SessionStart hook subprocess returns exit code zero (`apps/cli/tests/fixtures/provider-synthetic-codex.py:295-311, 339-350`). The hook's `send_local_event` connects and writes one bounded JSON line followed by a newline (`apps/cli/src/hooks/provider.rs:195-208`). The successful fixture marker therefore confirms the producer completed its write path; it does not establish listener acceptance or decoding. The later route-lost message follows `listener_lost`, and no watcher attach error appears (`apps/cli/src/hooks/provider.rs:600-635, 691-698`), so the Codex daemon snapshot and Desktop admission are downstream and not implicated by this failure.
+The exact producer is `provider-synthetic-codex.py:188-206`: its app-server daemon watches `foreign-probe`, sends a foreign `turn/started` notification, and writes `foreign-ack` only after `send_json` returns. Its outer handler silently returns for `EOFError`, `OSError`, `ValueError`, `KeyError` and JSON decode errors. The present log cannot distinguish a daemon that stopped polling from a closed WebSocket/send failure. Actionable next diagnostic: at the existing timeout, include at most 4 KiB of `terminal_output_for`, bounded daemon PID/socket liveness, and a static producer phase (`probe_seen`, `notification_sent`, or sanitized send/fixture error). Keep the foreign-thread isolation assertion and state/ownership expectations unchanged; do not infer a timeout-equality cause or widen production deadlines. The subsequent `provider_hooks.rs:216` mutex-poison failures are cascades.
 
-The repair preserves byte/queue bounds and ownership/generation assertions.
-Existing real socket/trickle and Desktop provider tests cover those observable
-contracts. No test-only clock seam or predicate-only equality test was added.
-The failed native owner-boundary test must pass before artifact acceptance.
+The same exact Codex owner-boundary test passed in the development Mac `scripts/check` run (`/tmp/zmux-provider-development-mac-c787b1b.log`, test line 696). That makes the Foundation failure intermittent in the synthetic follow-up producer, but does not turn its failed required Foundation Mac job into a pass.
 
-Poisoned-mutex failures after the primary fixture panic are cascades, not separate defects.
+### Native sidebar/status fixture
+
+The downloaded diagnostics report all three same-owner synthetic observations accepted: Claude Working, Codex Waiting, and OpenCode Idle, with the expected provider labels/groups visible in `zmux-sidebar-agents.png`. This is fixture/UI evidence only; it invokes no provider process or model turn.
+
+The sidebar smoke failed before testing any provider-row selection. At `apps/macos/Sources/App.swift:975-976`, it clicked the other workspace row and waited for focus to move to that workspace; after 20 seconds the snapshot still showed `focused=6` (`model=20`, two terminal panes, session 8, PID 53906, running). The failure screenshot is `zmux-sidebar-failure.png`. The agent screenshot and failure screenshot were inspected from `/tmp/zmux-provider-diagnostics-c787b1b/`. No selection result or before/after complete surface/session/PID inventory was produced, and `native-status-menu.json` is absent, so neither provider selection nor system status menu acceptance is established. The app process and owned socket were cleanly removed after failure. The actionable next step is to add bounded diagnostics for the exact WorkspaceRowView click target/action and resulting workspace-selection request/snapshot at this assertion; retain the later exact-provider identity and complete inventory checks.
+
+`native-smoke.json` confirms generic packaged smoke success, and the separate terminal selection/browser link and package rendering jobs passed. The build candidate metadata reports arm64/x86_64, minimum macOS 14, ad-hoc signing and `notarized: false`; it is candidate evidence, not an accepted final artifact. The development failure prevented the native sidebar/status receipt and final artifact upload.
 
 ## Verification and limits
 
-- `RUST_TEST_THREADS=2 scripts/check r9` passed locally before this source was pushed: `/tmp/zmux-provider-support-check-r9.log`.
-- Exact-source Foundation Ubuntu, both development scheduler builds, and standalone Swift typechecking passed. The Foundation macOS job and macOS development Rust-core gate failed the same fixture with the same ingress class; app packaging and packaged smoke did not execute.
-- The development artifact inventory contains only scheduler helpers and queue-layout evidence. No accepted app ZIP, app checksum, packaged source/build metadata, architecture/minimum-OS receipt, signing/notarization receipt, native sidebar/status/selection evidence, or sidebar screenshot exists for this source.
+- `RUST_TEST_THREADS=2 scripts/check r10` passed locally before this source was pushed: `/tmp/zmux-provider-support-check-r10.log`.
+- Exact-source Foundation Ubuntu passed and Foundation macOS failed the synthetic foreign-thread fixture as described above. In the development workflow, both scheduler builds, Swift typecheck, the Mac `scripts/check`, universal compilation, candidate retention, terminal-selection/browser links and packaged native rendering passed; sidebar/status failed before provider-row selection. No final accepted app artifact or status-menu receipt exists.
+- The downloaded candidate `build-info.json` records source SHA `c787b1b155cb24fb817164e4a0dd66b1316dfa88`, arm64/x86_64, minimum macOS 14.0, ad-hoc signing and `notarized: false`. These values do not establish acceptance because final artifact upload was skipped.
 - The synthetic fixture does not prove authenticated provider turns, live model behavior, physical Mac/audio behavior, or Intel runtime behavior.
 - Unrelated cloud-origin/profile-lifecycle changes were preserved.
 
 ## Previous failed-source history
 
-- Source `de857fc8e36f09fd3744b6b157f285d2265b1b0d`: Foundation run [41453473961](https://github.com/ashutoshpw/zmux/actions/runs/41453473961) and development run [41453473964](https://github.com/ashutoshpw/zmux/actions/runs/41453473964) both reached `CODEX_FIXTURE_READY`, then lost the provider event route with an empty baseline. This source surfaced `receive_timeout_setup/InvalidInput`, locating the failure at receive-timeout setup as described above.
+- Source `de857fc8e36f09fd3744b6b157f285d2265b1b0d`: Foundation run [41453473961](https://github.com/ashutoshpw/zmux/actions/runs/41453473961) and development run [41453473964](https://github.com/ashutoshpw/zmux/actions/runs/41453473964) both reached `CODEX_FIXTURE_READY`, then lost the provider event route with an empty baseline. The later `983f426` source added the operation classification and surfaced `receive_timeout_setup/InvalidInput`; `de857fc` itself established ingress loss without identifying that operation.
 - Source `8523529549da19776947d8124b03eda27aaf3a21`: Foundation run [41445123588](https://github.com/ashutoshpw/zmux/actions/runs/41445123588) failed when a Darwin Unix-socket fixture path exceeded `SUN_LEN`; development run [41445123728](https://github.com/ashutoshpw/zmux/actions/runs/41445123728) produced no accepted universal app. The short private `/tmp` fixture path was added afterward.
 - Source `b1e302b47004a3d39596e426650f9248aa1e3115`: Ubuntu Foundation passed; macOS Foundation [41447789115](https://github.com/ashutoshpw/zmux/actions/runs/41447789115) and development [41447789186](https://github.com/ashutoshpw/zmux/actions/runs/41447789186) failed while the synthetic daemon cold-start consumed the bounded status-probe interval. The fixture was changed to start the daemon explicitly before adapter invocation; production status deadlines were unchanged.
 - Source `5559f09b2c4b3ee12baa345dcd5ffc126ed74b3c`: Foundation [41450440329](https://github.com/ashutoshpw/zmux/actions/runs/41450440329) and development [41450440458](https://github.com/ashutoshpw/zmux/actions/runs/41450440458) reached `CODEX_FIXTURE_READY`, then failed the empty local Codex baseline assertion. No cause was visible in that source's diagnostics, so no speculative timeout or ownership change was made.

@@ -1,6 +1,6 @@
 # Status
 
-**Updated:** 2026-11-01
+**Updated:** 2026-11-02
 
 ## Implemented slice: Herdr near-black appearance
 
@@ -746,3 +746,35 @@ Remaining limitations and acceptance gaps:
 - Full RUST_TEST_THREADS=2 scripts/check r10 completed with exit 0 (/tmp/zmux-provider-support-check-r10.log). Focused real CLI/desktop provider and trickling-peer tests also passed.
 - Independent Luna reader review found no blocking defect. It confirmed absolute deadline checks across read/poll interruptions, valid descriptor lifetimes, buffered-data-before-EOF behavior, fixed frame/queue limits and unchanged identity/loss behavior. The 1 ms poll granularity adds at most roughly 1 ms plus OS scheduling delay.
 - Native repair acceptance still requires the previously failing macOS Codex owner-boundary test, completed universal packaging and artifact verification. Exact zero timeout equality is not claimed as an observed cause; the known failing timeout setup operation is removed from this reader.
+
+### Post-repair macOS acceptance on c787b1b
+
+Portable `scripts/check r10` passed before push. Development run 41460747813 passed Rust checks, universal compilation, signing verification and packaged native rendering. It failed sidebar acceptance while focusing the other workspace before provider selection (App.swift line 976); no final accepted app artifact was uploaded. Foundation run 41460747674 passed Ubuntu but failed the synthetic Codex foreign-event acknowledgement after connected Idle admission. The same Codex owner test passed in the development run. Neither failure has been classified as infrastructure-only, and neither gate is waived. Independent bounded discovery is investigating fixture WebSocket progress and the native row-click lifetime; preserve the exact terminal identity, provider state, once-only and full PTY inventory assertions. Candidate metadata is not final delivery evidence. Details are in `references/provider-build-delivery.md`.
+
+### Accepted post-c787b1b remediation scope
+
+Read-only native discovery did not prove stale-row or pointer-release cause. The smoke will resolve the current workspace row after inventory awaits and before every click, validate attachment/membership, and trace bounded pointer/action/selection metadata. It retains actual row clicks and the exact provider/current-state plus complete all-workspace PTY inventory assertions.
+
+Read-only Codex discovery reproduced a separate synthetic daemon defect: a malformed accepted WebSocket frame terminates the fixture listener; partial blocking frames and ignored buffered handshake bytes can prevent probe progress. This is not proof of the hosted missing-ack cause. The fixture producer will gain bounded incremental framing, accepted-peer error isolation, static phase diagnostics and timeout context; the existing product observer and its two-second RPC deadline remain unchanged. A distinct real-socket fixture-recovery regression is justified; the existing exact Desktop route test remains the primary product boundary.
+
+### Native current-row correction independently reviewed
+
+The smoke now resolves and validates its current other-workspace row inside each provider-selection iteration after asynchronous inventory reads. Native sidebar nonce-gated click diagnostics correlate the attempted click, row identity/revision, geometry/hit, activation/sheet state, down/up, selection callback and enqueue outcome, capped at 32 records of 2 KiB. Exact provider/current-state selection and the complete surface/session/PID inventories remain unchanged. Independent Luna static review found no actionable issue, including discardable Boolean returns and root-view hit-test coordinates. `git diff --check` passes; Linux has no Swift compiler, so actual AppKit compilation and packaged pointer dispatch remain required.
+
+### Combined portable validation after fixture and native smoke corrections
+
+`RUST_TEST_THREADS=2 scripts/check` r11 passed (exit 0; `/tmp/zmux-provider-support-check-r11.log`) with both corrections applied. The fixture recovery table, exact local Desktop Codex route and shared managed SSH Codex test also passed independently (`/tmp/zmux-codex-fixture-recovery-final.log`, `/tmp/zmux-codex-local-owner-final.log`, `/tmp/zmux-codex-ssh-shared-fixture-final.log`). The new recovery test was demonstrated failing before the producer fix for malformed-frame listener termination and partial-frame probe blocking. The fixture now parses bounded frames incrementally with absolute deadlines, isolates peer errors, and records static bounded phase/error labels plus sanitized timeout context. Native source review is clean; independent fixture review is pending. Hosted cause of the earlier foreign-ack timeout remains unproven, and fresh packaged Mac acceptance remains outstanding.
+
+### Independent fixture review and evidence-gap repairs
+
+Independent Luna review found no confirmed parser defect, but requested stronger evidence for absolute frame deadlines and handshake-buffered frames, and correction of the orderly-close case's misleading reset name. Main resolved these small review findings directly: the recovery table now includes a continuously trickling incomplete frame and verifies expiry without waiting for inactivity; `orderly_close` accurately names EOF; a separate raw-socket upgrade-plus-masked-RPC write exercises buffered remainder with no later input to wake the listener. The existing fixture test remains the server-recovery owner, with no new production seam or duplicate product lifecycle assertion.
+
+Both fixture tests pass (`/tmp/zmux-codex-fixture-review-fixes.log`). Buffered-upgrade regression fails against the original fixture at the expected missing RPC response (`/tmp/zmux-codex-fixture-buffered-before.log`). Deliberately resetting the frame deadline on every read makes only the trickle case fail its frame-timeout assertion (`/tmp/zmux-codex-fixture-trickle-reset-mutant.log`); the real fixture was restored. A final full `scripts/check` r12 is running after these test changes. The earlier hosted missing-ack cause is still not claimed as proven.
+
+### Packaged palette comparison correction
+
+Main inspected the actual c787b1b sidebar PNG against the supplied Herdr PNG. Dominant reference pixels are terminal `(23,24,27)` and sidebar `(17,18,20)`; c787b1b renders `(32,32,35)` and `(25,25,25)` despite the intended darker source values. The shared opaque window/sidebar/terminal/chrome tokens now use explicit sRGB colors sampled from the reference (chrome `(20,21,23)`), avoiding the brighter calibrated-color projection seen in the packaged capture. This is a four-token presentation correction; selection/status colors and lifecycle behavior are unchanged. No duplicate color-value test was added. The next packaged screenshot must verify actual rendering; Linux cannot establish the AppKit result.
+
+### Final portable gate before the next hosted build
+
+`RUST_TEST_THREADS=2 scripts/check` r12 passed (exit 0; `/tmp/zmux-provider-support-check-r12.log`), including workspace tests, strict Clippy, current license inventory and both native bridge ABI checks. The four sRGB presentation tokens were updated during the Rust suite; Linux does not compile or render AppKit, so their acceptance remains the exact-source macOS build and packaged screenshot. Fixture review findings are resolved by the focused failing-before/passing-after evidence above. `git diff --check` passes. Only the scoped CLI fixture/tests, native smoke/palette and current task evidence are staged; unrelated cloud-origin/profile-lifecycle work is excluded. No final app artifact is accepted yet.

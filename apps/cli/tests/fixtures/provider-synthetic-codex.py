@@ -16,6 +16,12 @@ import time
 
 THREAD = "thread:fixture/root"
 TURN = "turn:fixture/live"
+MAX_WEBSOCKET_FRAME_BYTES = 65_536
+MAX_WEBSOCKET_BUFFER_BYTES = (2 * MAX_WEBSOCKET_FRAME_BYTES) + 14
+WEBSOCKET_FRAME_DEADLINE_SECONDS = 2.0
+WEBSOCKET_HANDSHAKE_DEADLINE_SECONDS = 2.0
+MAX_WEBSOCKET_FRAMES_PER_TICK = 16
+WEBSOCKET_CLOSED = object()
 
 
 def current_state():
@@ -43,56 +49,130 @@ def send_json(connection, value):
     send_frame(connection, 1, json.dumps(value, separators=(",", ":")).encode())
 
 
+class WebSocketProtocolError(ValueError):
+    pass
+
+
+class WebSocketFrameDeadlineExceeded(TimeoutError):
+    pass
+
+
+class FixtureError(Exception):
+    pass
+
+
 class WebSocket:
     def __init__(self, connection, initial=b""):
         self.connection = connection
         self.buffer = bytearray(initial)
+        self.frame_deadline = (
+            time.monotonic() + WEBSOCKET_FRAME_DEADLINE_SECONDS if initial else None
+        )
 
-    def read_exact(self, size):
-        while len(self.buffer) < size:
-            chunk = self.connection.recv(max(1, size - len(self.buffer)))
-            if not chunk:
-                raise EOFError
-            self.buffer.extend(chunk)
-        value = bytes(self.buffer[:size])
-        del self.buffer[:size]
-        return value
+    def _check_frame_deadline(self):
+        if self.buffer and self.frame_deadline is None:
+            self.frame_deadline = time.monotonic() + WEBSOCKET_FRAME_DEADLINE_SECONDS
+        if self.frame_deadline is not None and time.monotonic() >= self.frame_deadline:
+            raise WebSocketFrameDeadlineExceeded
+
+    def _frame_header(self):
+        self._check_frame_deadline()
+        if len(self.buffer) < 2:
+            return None
+        first, second = self.buffer[:2]
+        opcode = first & 0x0F
+        final = bool(first & 0x80)
+        masked = bool(second & 0x80)
+        if first & 0x70 or not masked or not final:
+            raise WebSocketProtocolError("fixture received an unsupported WebSocket frame")
+        if opcode not in (1, 8, 9, 10):
+            raise WebSocketProtocolError("fixture received an unsupported WebSocket opcode")
+
+        length = second & 0x7F
+        header_size = 2
+        if length == 126:
+            if len(self.buffer) < header_size + 2:
+                return None
+            length = struct.unpack("!H", self.buffer[header_size : header_size + 2])[0]
+            header_size += 2
+        elif length == 127:
+            if len(self.buffer) < header_size + 8:
+                return None
+            length = struct.unpack("!Q", self.buffer[header_size : header_size + 8])[0]
+            header_size += 8
+        if length > MAX_WEBSOCKET_FRAME_BYTES:
+            raise WebSocketProtocolError("fixture received an oversized WebSocket frame")
+        if opcode in (8, 9, 10) and length > 125:
+            raise WebSocketProtocolError("fixture received an oversized control frame")
+        if len(self.buffer) < header_size + 4:
+            return None
+        return opcode, length, header_size
+
+    def has_complete_frame(self):
+        header = self._frame_header()
+        if header is None:
+            return False
+        _, length, header_size = header
+        return len(self.buffer) >= header_size + 4 + length
+
+    def read_available(self):
+        available = MAX_WEBSOCKET_BUFFER_BYTES - len(self.buffer)
+        if available <= 0:
+            raise WebSocketProtocolError("fixture WebSocket receive buffer exceeded its bound")
+        # The caller has polled readability; read only currently available bytes,
+        # never wait for the rest of a frame.
+        chunk = self.connection.recv(min(65_536, available))
+        if not chunk:
+            raise EOFError
+        was_empty = not self.buffer
+        self.buffer.extend(chunk)
+        if was_empty:
+            self.frame_deadline = time.monotonic() + WEBSOCKET_FRAME_DEADLINE_SECONDS
 
     def receive_json(self):
-        while True:
-            first, second = self.read_exact(2)
-            opcode = first & 0x0F
-            final = bool(first & 0x80)
-            if first & 0x70 or not second & 0x80 or not final:
-                raise ValueError("fixture received an unsupported WebSocket frame")
-            length = second & 0x7F
-            if length == 126:
-                length = struct.unpack("!H", self.read_exact(2))[0]
-            elif length == 127:
-                length = struct.unpack("!Q", self.read_exact(8))[0]
-            if length > 65536:
-                raise ValueError("fixture received an oversized WebSocket frame")
-            mask = self.read_exact(4)
-            payload = self.read_exact(length)
-            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
-            if opcode == 8:
-                return None
-            if opcode == 9:
-                send_frame(self.connection, 10, payload)
-                continue
-            if opcode == 10:
-                continue
-            if opcode != 1:
-                raise ValueError("fixture received a non-text WebSocket frame")
-            return json.loads(payload.decode("utf-8"))
+        header = self._frame_header()
+        if header is None:
+            return False, None
+        opcode, length, header_size = header
+        frame_size = header_size + 4 + length
+        if len(self.buffer) < frame_size:
+            return False, None
+        mask = self.buffer[header_size : header_size + 4]
+        payload = self.buffer[header_size + 4 : frame_size]
+        payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        del self.buffer[:frame_size]
+        self.frame_deadline = (
+            time.monotonic() + WEBSOCKET_FRAME_DEADLINE_SECONDS if self.buffer else None
+        )
+
+        if opcode == 8:
+            return True, WEBSOCKET_CLOSED
+        if opcode == 9:
+            send_frame(self.connection, 10, payload)
+            return True, None
+        if opcode == 10:
+            return True, None
+        if opcode != 1:
+            raise WebSocketProtocolError("fixture received a non-text WebSocket frame")
+        request = json.loads(payload.decode("utf-8"))
+        if not isinstance(request, dict):
+            raise WebSocketProtocolError("fixture received a non-object JSON request")
+        return True, request
 
 
 def accept_websocket(connection):
-    connection.settimeout(2.0)
+    connection.setblocking(True)
     request = bytearray()
+    deadline = time.monotonic() + WEBSOCKET_HANDSHAKE_DEADLINE_SECONDS
     while b"\r\n\r\n" not in request:
         if len(request) > 8192:
-            raise ValueError("fixture WebSocket request exceeded its bound")
+            raise WebSocketProtocolError("fixture WebSocket request exceeded its bound")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("fixture WebSocket handshake deadline exceeded")
+        readable, _, _ = select.select([connection], [], [], remaining)
+        if not readable:
+            raise TimeoutError("fixture WebSocket handshake deadline exceeded")
         chunk = connection.recv(4096)
         if not chunk:
             raise EOFError
@@ -116,8 +196,75 @@ def accept_websocket(connection):
             f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
         ).encode("ascii")
     )
-    connection.settimeout(None)
     return WebSocket(connection, remainder)
+
+
+class FixtureDiagnostics:
+    PHASES = {
+        "starting",
+        "listening",
+        "connected",
+        "probe_seen",
+        "notification_sent",
+        "notification_acked",
+        "client_closed",
+    }
+    ERRORS = {
+        "none",
+        "peer_closed",
+        "handshake_timeout",
+        "websocket_protocol_error",
+        "invalid_json",
+        "frame_timeout",
+        "socket_error",
+        "fixture_error",
+    }
+
+    def __init__(self):
+        self.path = os.environ.get("ZMUX_FAKE_CODEX_DIAGNOSTICS")
+        self.phase_value = "starting"
+        self.error_value = "none"
+        self._write()
+
+    def _write(self):
+        if not self.path:
+            return
+        content = f"phase={self.phase_value}\nerror={self.error_value}\n"
+        temporary = self.path + ".tmp"
+        try:
+            with open(temporary, "w", encoding="ascii") as output:
+                output.write(content)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self.path)
+        except OSError:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+    def phase(self, value):
+        self.phase_value = value if value in self.PHASES else "connected"
+        self._write()
+
+    def error(self, exception):
+        if isinstance(exception, WebSocketFrameDeadlineExceeded):
+            value = "frame_timeout"
+        elif isinstance(exception, TimeoutError):
+            value = "handshake_timeout"
+        elif isinstance(exception, EOFError):
+            value = "peer_closed"
+        elif isinstance(exception, json.JSONDecodeError):
+            value = "invalid_json"
+        elif isinstance(exception, FixtureError):
+            value = "fixture_error"
+        elif isinstance(exception, OSError):
+            value = "socket_error"
+        elif isinstance(exception, (ValueError, KeyError, struct.error)):
+            value = "websocket_protocol_error"
+        else:
+            value = "fixture_error"
+        self.error_value = value if value in self.ERRORS else "fixture_error"
+        self._write()
 
 
 def status_for(state):
@@ -163,6 +310,7 @@ def answer(websocket, request):
 def app_server():
     path = os.environ["ZMUX_FAKE_CODEX_SOCKET"]
     integration_root = os.environ.get("ZMUX_SHELL_INTEGRATION_DIRECTORY", "")
+    diagnostics = FixtureDiagnostics()
     try:
         os.unlink(path)
     except FileNotFoundError:
@@ -172,6 +320,7 @@ def app_server():
     os.chmod(path, 0o600)
     listener.listen(2)
     listener.settimeout(0.1)
+    diagnostics.phase("listening")
     foreign_probe = os.environ.get("ZMUX_FAKE_CODEX_FOREIGN_PROBE")
     foreign_sent = False
     try:
@@ -183,9 +332,25 @@ def app_server():
             with connection:
                 try:
                     websocket = accept_websocket(connection)
+                    diagnostics.phase("connected")
                     previous_state = current_state()
                     while os.path.isdir(integration_root):
+                        closed = False
+                        for _ in range(MAX_WEBSOCKET_FRAMES_PER_TICK):
+                            complete, request = websocket.receive_json()
+                            if not complete:
+                                break
+                            if request is WEBSOCKET_CLOSED:
+                                diagnostics.phase("client_closed")
+                                closed = True
+                                break
+                            if request is not None:
+                                answer(websocket, request)
+                        if closed:
+                            break
+
                         if foreign_probe and not foreign_sent and os.path.exists(foreign_probe):
+                            diagnostics.phase("probe_seen")
                             send_json(
                                 connection,
                                 {
@@ -199,10 +364,15 @@ def app_server():
                                     },
                                 },
                             )
+                            diagnostics.phase("notification_sent")
                             foreign_ack = os.environ.get("ZMUX_FAKE_CODEX_FOREIGN_ACK")
                             if foreign_ack:
-                                with open(foreign_ack, "w", encoding="ascii") as output:
-                                    output.write("sent")
+                                try:
+                                    with open(foreign_ack, "w", encoding="ascii") as output:
+                                        output.write("sent")
+                                except OSError as error:
+                                    raise FixtureError from error
+                            diagnostics.phase("notification_acked")
                             foreign_sent = True
                         state = current_state()
                         if state != previous_state:
@@ -229,16 +399,14 @@ def app_server():
                                     },
                                 )
                             previous_state = state
+
+                        if websocket.has_complete_frame():
+                            continue
                         readable, _, _ = select.select([connection], [], [], 0.025)
                         if readable:
-                            request = websocket.receive_json()
-                            if request is None:
-                                break
-                            answer(websocket, request)
-                except EOFError:
-                    continue
-    except (EOFError, OSError, ValueError, KeyError, json.JSONDecodeError):
-        return
+                            websocket.read_available()
+                except Exception as error:
+                    diagnostics.error(error)
     finally:
         listener.close()
         try:

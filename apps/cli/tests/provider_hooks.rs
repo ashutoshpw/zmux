@@ -2,7 +2,7 @@
 //! Synthetic provider --version only; no Claude invocation or user configuration.
 use nix::{
     fcntl::{FcntlArg, OFlag, fcntl},
-    sys::signal::{Signal, killpg},
+    sys::signal::{Signal, kill, killpg},
     unistd::Pid,
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -15,7 +15,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -24,6 +24,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tungstenite::{Message, WebSocket, client, protocol::Role};
 use zmux_desktop_runtime::{
     Command as DesktopCommand, Desktop, Request, Shell,
     agent_lifecycle::{Activity, AlertKind, Connection, Provider},
@@ -119,6 +120,428 @@ fn terminal_output_for(desktop: &Desktop, session_id: zmux_workspace_core::Sessi
                 .map(|terminal| terminal.viewport.contents.clone())
         })
         .unwrap_or_else(|| "<terminal snapshot unavailable>".into())
+}
+
+fn bounded_fixture_terminal_output(
+    desktop: &Desktop,
+    session_id: zmux_workspace_core::SessionId,
+    private_root: &Path,
+) -> String {
+    let private_root = private_root.to_string_lossy();
+    let snapshot = desktop.snapshot().ok();
+    let terminal = snapshot
+        .as_ref()
+        .and_then(|snapshot| {
+            snapshot
+                .control_frames
+                .iter()
+                .find(|frame| frame.session_id == session_id)
+                .and_then(|frame| frame.snapshot.as_ref())
+                .map(|terminal| terminal.viewport.contents.as_str())
+        })
+        .unwrap_or("<terminal snapshot unavailable>");
+    let mut bounded = String::new();
+    let mut remaining = terminal;
+    while !remaining.is_empty() {
+        if let Some(rest) = remaining.strip_prefix(private_root.as_ref()) {
+            if bounded.len() + "<fixture>".len() > 4096 {
+                break;
+            }
+            bounded.push_str("<fixture>");
+            remaining = rest;
+            continue;
+        }
+        let source_character = remaining.chars().next().unwrap();
+        let character = if source_character.is_control() {
+            ' '
+        } else {
+            source_character
+        };
+        if bounded.len() + character.len_utf8() > 4096 {
+            break;
+        }
+        bounded.push(character);
+        remaining = &remaining[source_character.len_utf8()..];
+    }
+    bounded
+}
+
+fn codex_fixture_diagnostics(path: &Path) -> String {
+    const PHASES: &[&str] = &[
+        "starting",
+        "listening",
+        "connected",
+        "probe_seen",
+        "notification_sent",
+        "notification_acked",
+        "client_closed",
+    ];
+    const ERRORS: &[&str] = &[
+        "none",
+        "peer_closed",
+        "handshake_timeout",
+        "websocket_protocol_error",
+        "invalid_json",
+        "frame_timeout",
+        "socket_error",
+        "fixture_error",
+    ];
+
+    let mut bytes = Vec::new();
+    if let Ok(file) = fs::File::open(path) {
+        let _ = file.take(128).read_to_end(&mut bytes);
+    }
+    let contents = String::from_utf8_lossy(&bytes);
+    let value = |key: &str, allowed: &[&str]| {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .filter(|value| allowed.contains(value))
+            .unwrap_or("unknown")
+    };
+    format!(
+        "phase={};error={}",
+        value("phase=", PHASES),
+        value("error=", ERRORS)
+    )
+}
+
+fn codex_fixture_liveness(pid_path: &Path, socket_path: &Path) -> String {
+    let mut bytes = Vec::new();
+    if let Ok(file) = fs::File::open(pid_path) {
+        let _ = file.take(32).read_to_end(&mut bytes);
+    }
+    let pid = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|pid| *pid > 0);
+    let pid_alive = pid.is_some_and(|pid| kill(Pid::from_raw(pid), None).is_ok());
+    let socket_present =
+        fs::symlink_metadata(socket_path).is_ok_and(|metadata| metadata.file_type().is_socket());
+    format!("daemon_pid_alive={pid_alive};socket_path_is_socket={socket_present}")
+}
+
+struct SyntheticCodexDaemon {
+    child: Child,
+    socket: PathBuf,
+    diagnostics: PathBuf,
+    foreign_probe: PathBuf,
+    foreign_ack: PathBuf,
+}
+
+impl SyntheticCodexDaemon {
+    fn start(directory: &Directory) -> Self {
+        let socket = directory.path.join("codex-app-server.sock");
+        let state = directory.path.join("provider-state");
+        let integration_root = directory.path.join("integration-root");
+        let diagnostics = directory.path.join("codex-diagnostics");
+        let foreign_probe = directory.path.join("foreign-probe");
+        let foreign_ack = directory.path.join("foreign-ack");
+        fs::write(&state, "idle").unwrap();
+        fs::create_dir(&integration_root).unwrap();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-synthetic-codex.py");
+        let child = Command::new("python3")
+            .arg(fixture)
+            .arg("app-server-daemon")
+            .env("ZMUX_FAKE_CODEX_SOCKET", &socket)
+            .env("ZMUX_FAKE_CODEX_STATE", state)
+            .env("ZMUX_SHELL_INTEGRATION_DIRECTORY", integration_root)
+            .env("ZMUX_FAKE_CODEX_DIAGNOSTICS", &diagnostics)
+            .env("ZMUX_FAKE_CODEX_FOREIGN_PROBE", &foreign_probe)
+            .env("ZMUX_FAKE_CODEX_FOREIGN_ACK", &foreign_ack)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start the synthetic Codex app-server fixture");
+        let mut daemon = Self {
+            child,
+            socket,
+            diagnostics,
+            foreign_probe,
+            foreign_ack,
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if fs::symlink_metadata(&daemon.socket)
+                .is_ok_and(|metadata| metadata.file_type().is_socket())
+            {
+                return daemon;
+            }
+            if let Some(status) = daemon.child.try_wait().unwrap() {
+                panic!("synthetic Codex fixture exited before listening: {status}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "synthetic Codex fixture did not create its Unix socket"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn is_running(&mut self) -> bool {
+        self.child.try_wait().unwrap().is_none()
+    }
+}
+
+impl Drop for SyntheticCodexDaemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn fixture_websocket_connect(path: &Path) -> Result<WebSocket<UnixStream>, String> {
+    let stream = UnixStream::connect(path).map_err(|error| error.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| error.to_string())?;
+    let (websocket, response) =
+        client("ws://localhost", stream).map_err(|error| error.to_string())?;
+    if response.status().as_u16() != 101 {
+        return Err("fixture did not accept a valid WebSocket handshake".into());
+    }
+    Ok(websocket)
+}
+
+fn fixture_valid_rpc(path: &Path) -> Result<(), String> {
+    let mut websocket = fixture_websocket_connect(path)?;
+    websocket
+        .send(Message::Text(r#"{"id":1,"method":"initialize"}"#.into()))
+        .map_err(|error| error.to_string())?;
+    fixture_initialize_response(&mut websocket)
+}
+
+fn fixture_initialize_response(websocket: &mut WebSocket<UnixStream>) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let message = websocket.read().map_err(|error| error.to_string())?;
+        let Message::Text(response) = message else {
+            if Instant::now() >= deadline {
+                return Err("fixture did not answer the recovery RPC".into());
+            }
+            continue;
+        };
+        let response: Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
+        if response.get("id") == Some(&json!(1)) {
+            if response["result"]["userAgent"] == "synthetic" {
+                return Ok(());
+            }
+            return Err("fixture returned an invalid initialize response".into());
+        }
+        if Instant::now() >= deadline {
+            return Err("fixture did not answer the recovery RPC".into());
+        }
+    }
+}
+
+fn fixture_diagnostic_error(path: &Path) -> Option<String> {
+    let mut contents = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(128)
+        .read_to_end(&mut contents)
+        .ok()?;
+    let contents = std::str::from_utf8(&contents).ok()?;
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("error=").map(str::to_owned))
+}
+
+fn wait_for_fixture_error(path: &Path, expected: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if fixture_diagnostic_error(path).as_deref() == Some(expected) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    fixture_diagnostic_error(path).as_deref() == Some(expected)
+}
+
+#[test]
+fn synthetic_codex_fixture_recovers_after_websocket_peer_errors() {
+    #[derive(Clone, Copy)]
+    enum PeerCase {
+        Malformed,
+        Oversized,
+        OrderlyClose,
+        Partial,
+        Trickle,
+    }
+
+    let mut failures = Vec::new();
+    for (name, case, expected_error) in [
+        ("malformed", PeerCase::Malformed, "websocket_protocol_error"),
+        ("oversized", PeerCase::Oversized, "websocket_protocol_error"),
+        ("orderly_close", PeerCase::OrderlyClose, "peer_closed"),
+        ("partial", PeerCase::Partial, "frame_timeout"),
+        ("trickle", PeerCase::Trickle, "frame_timeout"),
+    ] {
+        let directory = Directory::new();
+        let mut daemon = SyntheticCodexDaemon::start(&directory);
+        let mut peer = match fixture_websocket_connect(&daemon.socket) {
+            Ok(peer) => Some(peer),
+            Err(error) => {
+                failures.push(format!("{name}: could not connect fixture peer: {error}"));
+                continue;
+            }
+        };
+        let mut peer_failure = None;
+        let mut trickle_writer = None;
+        match case {
+            PeerCase::Malformed => {
+                // A client WebSocket frame must be masked; this validly reaches
+                // the fixture's protocol parser and fails that contract.
+                if let Err(error) = peer.as_mut().unwrap().get_mut().write_all(&[0x81, 0x00]) {
+                    peer_failure = Some(format!("could not send malformed peer: {error}"));
+                }
+            }
+            PeerCase::Oversized => {
+                let mut frame = vec![0x81, 0xff];
+                frame.extend_from_slice(&65_537_u64.to_be_bytes());
+                if let Err(error) = peer.as_mut().unwrap().get_mut().write_all(&frame) {
+                    peer_failure = Some(format!("could not send oversized peer: {error}"));
+                }
+            }
+            PeerCase::OrderlyClose => {
+                if let Err(error) = peer
+                    .as_mut()
+                    .unwrap()
+                    .get_mut()
+                    .shutdown(std::net::Shutdown::Both)
+                {
+                    peer_failure = Some(format!("could not close peer: {error}"));
+                }
+            }
+            PeerCase::Partial => {
+                if let Err(error) = peer.as_mut().unwrap().get_mut().write_all(&[0x81]) {
+                    peer_failure = Some(format!("could not send partial frame: {error}"));
+                } else {
+                    fs::write(
+                        &daemon.foreign_probe,
+                        b"probe while client frame is partial",
+                    )
+                    .unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(1);
+                    while !daemon.foreign_ack.is_file() && Instant::now() < deadline {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    if !daemon.foreign_ack.is_file() {
+                        peer_failure =
+                            Some("partial WebSocket frame blocked the fixture probe loop".into());
+                        let _ = peer
+                            .as_mut()
+                            .unwrap()
+                            .get_mut()
+                            .shutdown(std::net::Shutdown::Both);
+                    }
+                }
+            }
+            PeerCase::Trickle => {
+                let mut stream = peer.as_mut().unwrap().get_mut().try_clone().unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                // Start an incomplete 65,535-byte masked frame, then keep
+                // delivering bytes well inside an inactivity timeout. The
+                // frame must still expire relative to its first byte.
+                stream
+                    .write_all(&[0x81, 0xfe, 0xff, 0xff, 0, 0, 0, 0])
+                    .unwrap();
+                let stopped = Arc::new(AtomicBool::new(false));
+                let writer_stopped = Arc::clone(&stopped);
+                let writer = thread::spawn(move || {
+                    while !writer_stopped.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(80));
+                        if stream.write_all(b"x").is_err() {
+                            break;
+                        }
+                    }
+                });
+                trickle_writer = Some((stopped, writer));
+            }
+        }
+        if !matches!(case, PeerCase::Partial | PeerCase::Trickle) {
+            drop(peer.take());
+        }
+
+        if let Some(error) = peer_failure {
+            failures.push(format!("{name}: {error}"));
+        }
+        let error_observed =
+            wait_for_fixture_error(&daemon.diagnostics, expected_error, Duration::from_secs(3));
+        if let Some((stopped, writer)) = trickle_writer {
+            stopped.store(true, Ordering::Release);
+            writer.join().unwrap();
+        }
+        if !error_observed {
+            failures.push(format!(
+                "{name}: expected static fixture error classification {expected_error}"
+            ));
+        }
+        drop(peer.take());
+        if !daemon.is_running() {
+            failures.push(format!(
+                "{name}: accepted peer terminated the fixture listener"
+            ));
+        }
+        if let Err(error) = fixture_valid_rpc(&daemon.socket) {
+            failures.push(format!(
+                "{name}: later valid client was not served: {error}"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "synthetic Codex fixture recovery contract failed:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn synthetic_codex_fixture_answers_a_frame_buffered_with_the_upgrade() {
+    let directory = Directory::new();
+    let daemon = SyntheticCodexDaemon::start(&directory);
+    let mut stream = UnixStream::connect(&daemon.socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut upgrade = b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".to_vec();
+    let request = br#"{"id":1,"method":"initialize"}"#;
+    let mask = [1_u8, 2, 3, 4];
+    upgrade.extend([0x81, 0x80 | request.len() as u8]);
+    upgrade.extend(mask);
+    upgrade.extend(
+        request
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| byte ^ mask[index % 4]),
+    );
+    // One write makes the first frame available to the HTTP upgrade read.
+    // No later request can wake a fixture that forgets the buffered remainder.
+    stream.write_all(&upgrade).unwrap();
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        assert!(
+            response.len() < 8192,
+            "fixture upgrade response exceeded its bound"
+        );
+        let mut byte = [0];
+        stream
+            .read_exact(&mut byte)
+            .expect("fixture upgrade response");
+        response.push(byte[0]);
+    }
+    assert!(response.starts_with(b"HTTP/1.1 101 "));
+    let mut websocket = WebSocket::from_raw_socket(stream, Role::Client, None);
+    fixture_initialize_response(&mut websocket)
+        .expect("fixture must answer a frame buffered with its upgrade");
 }
 
 fn wait_local_codex(
@@ -1718,6 +2141,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route() {
     let calls = dir.path.join("provider-calls");
     let foreign_probe = dir.path.join("foreign-probe");
     let foreign_ack = dir.path.join("foreign-ack");
+    let diagnostics = dir.path.join("codex-app-server-diagnostics");
     let stop_probe = dir.path.join("stop-probe");
     let stop_result = dir.path.join("stop-result");
     let release = dir.path.join("provider-release");
@@ -1761,6 +2185,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route() {
         .env("FIXTURE_LOCAL_CODEX_CALLS", calls)
         .env("FIXTURE_LOCAL_CODEX_FOREIGN_PROBE", foreign_probe)
         .env("FIXTURE_LOCAL_CODEX_FOREIGN_ACK", foreign_ack)
+        .env("FIXTURE_LOCAL_CODEX_DIAGNOSTICS", diagnostics)
         .env("FIXTURE_LOCAL_CODEX_STOP_PROBE", stop_probe)
         .env("FIXTURE_LOCAL_CODEX_STOP_RESULT", stop_result)
         .env("FIXTURE_LOCAL_CODEX_RELEASE", release)
@@ -1795,6 +2220,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     let foreign_probe =
         PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_FOREIGN_PROBE").unwrap());
     let foreign_ack = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_FOREIGN_ACK").unwrap());
+    let diagnostics = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_DIAGNOSTICS").unwrap());
     let stop_probe = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_STOP_PROBE").unwrap());
     let stop_result = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_STOP_RESULT").unwrap());
     let release = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_RELEASE").unwrap());
@@ -1802,12 +2228,13 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     fs::write(
         &shell_rc,
         format!(
-            "PS1=\nexport ZMUX_FAKE_CODEX_STATE='{}'\nexport ZMUX_FAKE_CODEX_REPORT='{}'\nexport ZMUX_FAKE_CODEX_CALLS='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_PROBE='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_ACK='{}'\nexport ZMUX_FAKE_CODEX_STOP_PROBE='{}'\nexport ZMUX_FAKE_CODEX_STOP_RESULT='{}'\nexport ZMUX_FAKE_CODEX_RELEASE='{}'\nexport ZMUX_FAKE_CODEX_SOCKET='{}'\nexport ZMUX_FAKE_CODEX_DAEMON_PID='{}'\nexport ZMUX_FAKE_CODEX_KEEP_DAEMON=1\nexport PATH='{}':\"$PATH\"\nprintf 'LOCAL_CODEX_SHELL_READY\\n'\n",
+            "PS1=\nexport ZMUX_FAKE_CODEX_STATE='{}'\nexport ZMUX_FAKE_CODEX_REPORT='{}'\nexport ZMUX_FAKE_CODEX_CALLS='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_PROBE='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_ACK='{}'\nexport ZMUX_FAKE_CODEX_DIAGNOSTICS='{}'\nexport ZMUX_FAKE_CODEX_STOP_PROBE='{}'\nexport ZMUX_FAKE_CODEX_STOP_RESULT='{}'\nexport ZMUX_FAKE_CODEX_RELEASE='{}'\nexport ZMUX_FAKE_CODEX_SOCKET='{}'\nexport ZMUX_FAKE_CODEX_DAEMON_PID='{}'\nexport ZMUX_FAKE_CODEX_KEEP_DAEMON=1\nexport PATH='{}':\"$PATH\"\nprintf 'LOCAL_CODEX_SHELL_READY\\n'\n",
             state.display(),
             report.display(),
             calls.display(),
             foreign_probe.display(),
             foreign_ack.display(),
+            diagnostics.display(),
             stop_probe.display(),
             stop_result.display(),
             release.display(),
@@ -1929,7 +2356,13 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     while !foreign_ack.is_file() {
         assert!(
             Instant::now() < foreign_deadline,
-            "synthetic daemon did not send the foreign thread notification"
+            "synthetic daemon did not send the foreign thread notification; producer={}; {}; terminal={}",
+            codex_fixture_diagnostics(&root.join("codex-app-server-diagnostics")),
+            codex_fixture_liveness(
+                &root.join("codex-app-server.pid"),
+                &root.join("codex-app-server.sock")
+            ),
+            bounded_fixture_terminal_output(&running.desktop, session_id, &root)
         );
         thread::sleep(Duration::from_millis(5));
     }
