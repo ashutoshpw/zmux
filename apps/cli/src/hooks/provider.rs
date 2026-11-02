@@ -273,7 +273,7 @@ fn automatic_launch(
 
     let runtime = Uuid::new_v4();
     let generation = Uuid::new_v4();
-    let runtime_dir = match create_invocation_directory(root, provider_name) {
+    let runtime_dir = match create_invocation_directory(provider_name) {
         Ok(runtime_dir) => runtime_dir,
         Err(_) => return launch_untracked(provider, args, "private provider adapter setup failed"),
     };
@@ -407,10 +407,15 @@ fn find_executable(name: &str) -> Result<PathBuf, CliError> {
     Err(CliError(format!("{name} executable was not found on PATH")))
 }
 
-fn create_invocation_directory(root: &Path, provider: ProviderName) -> Result<PathBuf, CliError> {
+fn create_invocation_directory(provider: ProviderName) -> Result<PathBuf, CliError> {
+    // Darwin's Unix socket path is shorter than a normal TMPDIR plus the
+    // session/plugin directory suffixes. Keep only the invocation transport
+    // in a short, freshly created private directory; the exact session root
+    // has already been validated and remains held by the caller.
+    let parent = Path::new("/tmp").canonicalize()?;
     for _ in 0..8 {
-        let path = root.join(format!(
-            "{}-auto-{}",
+        let path = parent.join(format!(
+            "zp-{}-{}",
             provider.executable(),
             Uuid::new_v4().simple()
         ));

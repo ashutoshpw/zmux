@@ -657,3 +657,27 @@ Remaining limitations and acceptance gaps:
 - RUST_TEST_THREADS=2 scripts/check r4 completed with exit 0 for the final local/SSH passthrough counter and short-option coverage. Log: /tmp/zmux-provider-support-check-r4.log.
 - Core lifecycle admission, recovery/dedupe and provider labels committed as 1a589a5. Local/managed SSH provider adapters, Claude compatibility, regression coverage, usage docs and generated dependency notices committed as 50ecf71. All commits use explicit scoped paths; unrelated cloud-origin/profile-lifecycle work remains untouched.
 - The native multi-provider smoke and task evidence form the final source slice. Swift/AppKit compilation, actual packaged rendering, universal architectures/signature verification and final artifact download are the remaining delivery gates.
+
+### Universal build delivery running
+
+- Scoped commits 1a589a5, 50ecf71 and 8523529 pushed together to origin/main. Exact final source: 8523529549da19776947d8124b03eda27aaf3a21. Only the three named unrelated cloud-origin/profile-lifecycle dirty paths remained after source commits.
+- macOS development workflow: https://github.com/ashutoshpw/zmux/actions/runs/41445123728 . Foundation checks: https://github.com/ashutoshpw/zmux/actions/runs/41445123588 . Both started on the exact source.
+- Delivery verification is assigned to a bounded Luna worker: require successful executed gates, final accepted universal artifact upload, actual download/checksum/source/architecture/minOS/signing receipts and packaged native multi-provider visual/selection evidence. A started workflow or candidate archive is not accepted delivery. No further source push is planned while the build runs.
+
+### Hosted Darwin fixture correction
+
+- Foundation macOS source 8523529 failed the new bounded Codex WebSocket fixture because env::temp_dir plus its UUID/socket suffix exceeded Darwin SUN_LEN. Swift typechecking passed in the parallel development workflow; no accepted universal app artifact was uploaded. Exact evidence is in references/provider-build-delivery.md.
+- The fixture now creates its private unique directory under canonical /tmp with a compact name. The same real UnixListener/WebSocket/RPC test remains unchanged and passes locally; no production adapter behavior or assertion is weakened. Other newly added default socket fixtures use short /tmp roots; the installed-provider-only ignored probe remains outside hosted execution.
+- RUST_TEST_THREADS=2 scripts/check r5 is running at /tmp/zmux-provider-support-check-r5.log before the scoped fix commit and fresh exact-source workflows. The earlier source's candidate/scheduler artifacts are not accepted app delivery.
+
+### Long temporary-path production regression fixed
+
+- The socket audit also found local Codex/OpenCode event sockets nested under the session's TMPDIR-derived root. Normal long macOS TMPDIR paths can therefore exceed SUN_LEN and force tracking fallback, beyond the WebSocket unit-fixture failure.
+- Extended the existing actual local Desktop/Codex adapter regression to run in an isolated child with a long private TMPDIR. Before the fix it failed with private provider event route could not be created (log /tmp/zmux-provider-long-temp-before.log).
+- Local invocation transport/config storage now uses a fresh mode-0700 UUID directory under canonical /tmp with a compact name; exact session-root validation and its held directory lease remain required. Normal invocation teardown still removes only that newly owned directory. The regression now passes (/tmp/zmux-provider-long-temp-after.log).
+- The bounded fake daemon fixture also uses canonical /tmp. Hosted source 8523529's development job ultimately failed the same unit fixture, so neither old run has an accepted app archive. Full validation r6 follows these corrections before a new source build.
+
+### Portable validation passed for path correction
+
+- RUST_TEST_THREADS=2 scripts/check r6 completed with exit 0. Log: /tmp/zmux-provider-support-check-r6.log. This includes the long-TMPDIR real local adapter regression, existing daemon fixture, all local/SSH provider tests, workspace tests, strict Clippy, notices and native bridge ABI gates.
+- The scoped path correction and its evidence will be committed/pushed for fresh exact-source Foundation and universal development workflows. Source 8523529 remains an unsuccessful hosted attempt; no app artifact from it is accepted.

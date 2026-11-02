@@ -51,3 +51,5 @@ Rust owns provider lifecycle/status and the local Claude adapter invoked by comp
 - [references/provider-adapters.md](references/provider-adapters.md) — local and managed SSH producer behavior, trust/config preservation, setup requirements and owner-boundary coverage.
 
 - [references/provider-adapters.md](references/provider-adapters.md) — local/SSH adapter transport, provider setup, source snapshots and installed-provider evidence.
+
+- [references/provider-build-delivery.md](references/provider-build-delivery.md) — exact-source hosted build attempts, downloaded artifact verification and acceptance limits.

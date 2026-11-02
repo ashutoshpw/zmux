@@ -964,7 +964,10 @@ mod tests {
 
     #[test]
     fn existing_daemon_websocket_is_bounded_and_queues_interleaved_notifications() {
-        let directory = env::temp_dir().join(format!("zmux-codex-ws-{}", Uuid::new_v4()));
+        let directory = Path::new("/tmp")
+            .canonicalize()
+            .expect("resolve the short Unix-socket fixture parent")
+            .join(format!("zcws-{}", Uuid::new_v4().simple()));
         fs::DirBuilder::new()
             .mode(0o700)
             .create(&directory)

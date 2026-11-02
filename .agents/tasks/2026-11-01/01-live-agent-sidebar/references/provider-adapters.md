@@ -160,3 +160,16 @@ production CLI/control/SSH boundaries; the reader test runs its real socket
 worker. The Node plugin test supplies a synthetic getconf result for the POSIX
 minimum and checks actual FIFO loss versus event bytes. No production export,
 test flag or test-only injection API was added.
+
+## macOS transport-path correction
+
+The exact session root remains required and held during setup. The separate
+local provider event socket and its invocation-only plugin/config files use a
+fresh private directory under canonical /tmp, rather than nesting under the
+possibly long TMPDIR-derived session root. This keeps the Unix socket within
+Darwin SUN_LEN without changing the user's temporary-directory preference or
+provider configuration. Existing actual Desktop/Codex coverage now runs with a
+long TMPDIR; it reproduced event-route fallback before this correction and
+passes afterward. The fake daemon WebSocket fixture uses the same short-parent
+rule. Forced termination can still retain private adapter files for review;
+normal teardown removes only the invocation's owned directory.

@@ -1724,6 +1724,9 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route() {
         paths.extend(std::env::split_paths(&existing));
     }
     let path = std::env::join_paths(paths).unwrap();
+    let long_temporary_root = dir.path.join("provider-temporary-root-".repeat(6));
+    fs::create_dir(&long_temporary_root).unwrap();
+    fs::set_permissions(&long_temporary_root, fs::Permissions::from_mode(0o700)).unwrap();
     let mut child = Command::new(private_test_binary);
     child.args([
         "--ignored",
@@ -1738,6 +1741,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route() {
     }
     child
         .env("HOME", &dir.path)
+        .env("TMPDIR", &long_temporary_root)
         .env("PATH", path)
         .env("CODEX_HOME", dir.path.join("codex-home"))
         .env("FIXTURE_LOCAL_CODEX_STATE", state)
