@@ -9,9 +9,11 @@ mod codex;
 mod opencode;
 
 use super::*;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
+    os::fd::AsFd,
     os::unix::net::{UnixListener, UnixStream},
     process::{Child, Command, Stdio},
     sync::{
@@ -466,7 +468,7 @@ fn accept_events(
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                if let Err(error) = stream.set_nonblocking(false) {
+                if let Err(error) = stream.set_nonblocking(true) {
                     eprintln!(
                         "zmux: provider ingress failure: accepted_socket_mode/{:?}",
                         error.kind()
@@ -547,15 +549,8 @@ fn read_event(stream: &mut UnixStream) -> Option<Value> {
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        if Instant::now() >= deadline {
             eprintln!("zmux: provider ingress failure: frame_deadline");
-            return None;
-        };
-        if let Err(error) = stream.set_read_timeout(Some(remaining)) {
-            eprintln!(
-                "zmux: provider ingress failure: receive_timeout_setup/{:?}",
-                error.kind()
-            );
             return None;
         }
         match stream.read(&mut byte) {
@@ -569,6 +564,26 @@ fn read_event(stream: &mut UnixStream) -> Option<Value> {
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    eprintln!("zmux: provider ingress failure: frame_deadline");
+                    return None;
+                }
+                let timeout =
+                    PollTimeout::from(remaining.as_millis().clamp(1, u16::MAX as u128) as u16);
+                let mut descriptors = [PollFd::new(
+                    stream.as_fd(),
+                    PollFlags::POLLIN | PollFlags::POLLHUP,
+                )];
+                match poll(&mut descriptors, timeout) {
+                    Ok(_) | Err(nix::errno::Errno::EINTR) => continue,
+                    Err(_) => {
+                        eprintln!("zmux: provider ingress failure: frame_poll");
+                        return None;
+                    }
+                }
+            }
             Err(error) => {
                 eprintln!(
                     "zmux: provider ingress failure: frame_read/{:?}",

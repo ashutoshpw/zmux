@@ -729,3 +729,20 @@ Remaining limitations and acceptance gaps:
 
 - RUST_TEST_THREADS=2 scripts/check r9 completed with exit 0 (/tmp/zmux-provider-support-check-r9.log). The next source changes only bounded ingress error classification and evidence; frame/order/identity validation and all time budgets remain unchanged.
 - A fresh hosted diagnostic attempt will identify the exact listener operation before any behavior repair or retry decision. No app artifact is accepted from the earlier sources.
+
+### Ingress-classification source pushed
+
+- Source 983f426da15223dcb0da4912e6aee53a18616251 pushed after scripts/check r9 passed. New hosted diagnostics will classify the exact failing listener operation, rather than changing protocol or deadlines without evidence.
+- A fresh bounded Luna task owns diagnostic extraction/source diagnosis and, only if every gate passes, full universal archive acceptance. No previous failed-source artifact is accepted.
+
+### Portable nonblocking ingress repair
+
+- Both hosted Mac logs on source 983f426 identify receive_timeout_setup/InvalidInput. That proves the failing receive-timeout operation; the timeout duration itself was not logged, so exact deadline equality remains a source-level hypothesis rather than an observed value.
+- Replaced per-byte SO_RCVTIMEO setup with explicit nonblocking accepted streams and poll under the existing 200 ms absolute frame deadline. Zero/expired budgets are rejected before waiting; read ordering, byte/queue caps and loss-to-Unknown behavior remain unchanged.
+- Focused CLI unit and provider-hook suites pass after the repair, including the real trickling-peer teardown test and real Desktop local provider tests (/tmp/zmux-provider-poll-ingress-after.log). Full scripts/check r10 and an independent reader review follow before native re-execution.
+
+### Nonblocking ingress repair validated and reviewed
+
+- Full RUST_TEST_THREADS=2 scripts/check r10 completed with exit 0 (/tmp/zmux-provider-support-check-r10.log). Focused real CLI/desktop provider and trickling-peer tests also passed.
+- Independent Luna reader review found no blocking defect. It confirmed absolute deadline checks across read/poll interruptions, valid descriptor lifetimes, buffered-data-before-EOF behavior, fixed frame/queue limits and unchanged identity/loss behavior. The 1 ms poll granularity adds at most roughly 1 ms plus OS scheduling delay.
+- Native repair acceptance still requires the previously failing macOS Codex owner-boundary test, completed universal packaging and artifact verification. Exact zero timeout equality is not claimed as an observed cause; the known failing timeout setup operation is removed from this reader.

@@ -143,7 +143,8 @@ fixture additionally requires Node.js to host the synthetic plugin callbacks.
   generation pair, preserving bounded outcome histories and retired-pair
   fencing, just as recoverable evidence loss does.
 - Local event reads have an absolute 200 ms frame deadline (not one timeout
-  per byte); accepted sockets are explicitly blocking on Darwin too. This
+  per byte); accepted sockets are explicitly nonblocking and wait through
+  poll under the same absolute deadline. This
   bounds listener join after provider exit despite a trickling peer.
 - Python checks fpathconf(PC_PIPE_BUF) on the actual open FIFO descriptor.
   Node probes getconf once per FIFO identity with a 500 ms deadline, falling
@@ -179,3 +180,14 @@ query only reports an existing daemon, matching the production precondition;
 cold daemon creation no longer shares the two-second status-probe budget. The
 fixture's bounded startup phase is separate and does not widen production RPC
 or status deadlines.
+
+## Darwin receive-timeout repair
+
+Hosted Mac ingress failed at receive_timeout_setup/InvalidInput before the
+SessionStart observation reached the watcher. The local reader now uses the
+project's existing nonblocking Unix-stream/poll pattern, with the same 200 ms
+absolute frame deadline, explicit zero/expired-budget rejection, buffered-data
+before EOF handling, 4096-byte frame cap and unchanged queue/state rules. It no
+longer reconfigures SO_RCVTIMEO for each byte. The existing actual Desktop
+provider regression is the native owner-boundary acceptance test; the real
+trickling-peer test continues to enforce bounded teardown on portable builds.
