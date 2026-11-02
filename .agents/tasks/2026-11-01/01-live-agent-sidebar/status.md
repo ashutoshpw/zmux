@@ -713,3 +713,19 @@ Remaining limitations and acceptance gaps:
 
 - RUST_TEST_THREADS=2 scripts/check r8 completed with exit 0 (/tmp/zmux-provider-support-check-r8.log). The scoped change exposes sanitized attach errors and bounded synthetic terminal output at the owner-boundary timeout; lifecycle behavior, ownership/generation fences and all deadlines are unchanged.
 - Next hosted run is diagnostic-first: if the macOS baseline remains absent, retrieve the precise surfaced error before selecting a repair. No infrastructure retry or unverified app acceptance is authorized from the previous failures.
+
+### Diagnostic source pushed
+
+- Source de857fc8e36f09fd3744b6b157f285d2265b1b0d pushed after scripts/check r8 passed. A fresh Luna diagnostic/acceptance task will read the newly surfaced macOS attachment failure before proposing a repair, or continue through a verified universal archive if every gate passes.
+- No additional guard relaxation, production timeout increase, daemon start in production, or same-source infrastructure retry was introduced. Previous absence of the lifecycle row remains unresolved until the new hosted evidence identifies the cause.
+
+### Darwin ingress narrowed; operation-level diagnostics added
+
+- Source de857fc reproduced the missing baseline in both hosted Mac jobs. Bounded terminal output shows fixture daemon running and CODEX_FIXTURE_READY, then provider event route was lost and SessionStart tracking not active. No attach error appeared, placing failure before watcher/desktop baseline admission. Exact logs: /tmp/zmux-provider-foundation-mac-de857.log and /tmp/zmux-provider-development-de857.log.
+- Listener failure classes are now emitted once at the failing owner: accept, accepted socket mode, absolute frame deadline, receive-timeout setup, frame read/decode/byte bound, event validation and queue full/disconnected. Only static labels plus standard error/category enums are printed; no provider JSON, prompt, path, tool input or identity is logged. Behavior and deadlines remain unchanged until a concrete failure class is available.
+- Full scripts/check r9 is running at /tmp/zmux-provider-support-check-r9.log before the diagnostic source commit. No app build is accepted.
+
+### Ingress diagnostics validated
+
+- RUST_TEST_THREADS=2 scripts/check r9 completed with exit 0 (/tmp/zmux-provider-support-check-r9.log). The next source changes only bounded ingress error classification and evidence; frame/order/identity validation and all time budgets remain unchanged.
+- A fresh hosted diagnostic attempt will identify the exact listener operation before any behavior repair or retry decision. No app artifact is accepted from the earlier sources.

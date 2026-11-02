@@ -466,7 +466,11 @@ fn accept_events(
     while !stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                if stream.set_nonblocking(false).is_err() {
+                if let Err(error) = stream.set_nonblocking(false) {
+                    eprintln!(
+                        "zmux: provider ingress failure: accepted_socket_mode/{:?}",
+                        error.kind()
+                    );
                     lost.store(true, Ordering::Release);
                     stop.store(true, Ordering::Release);
                     break;
@@ -503,13 +507,19 @@ fn accept_events(
                 };
                 match event {
                     Ok(event) => {
-                        if sender.try_send(event).is_err() {
+                        if let Err(error) = sender.try_send(event) {
+                            let class = match error {
+                                mpsc::TrySendError::Full(_) => "queue_full",
+                                mpsc::TrySendError::Disconnected(_) => "queue_disconnected",
+                            };
+                            eprintln!("zmux: provider ingress failure: {class}");
                             lost.store(true, Ordering::Release);
                             stop.store(true, Ordering::Release);
                             break;
                         }
                     }
                     Err(_) => {
+                        eprintln!("zmux: provider ingress failure: event_validation");
                         lost.store(true, Ordering::Release);
                         stop.store(true, Ordering::Release);
                         break;
@@ -519,7 +529,11 @@ fn accept_events(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(5));
             }
-            Err(_) => {
+            Err(error) => {
+                eprintln!(
+                    "zmux: provider ingress failure: listener_accept/{:?}",
+                    error.kind()
+                );
                 lost.store(true, Ordering::Release);
                 stop.store(true, Ordering::Release);
                 break;
@@ -533,22 +547,47 @@ fn read_event(stream: &mut UnixStream) -> Option<Value> {
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let remaining = deadline.checked_duration_since(Instant::now())?;
-        stream.set_read_timeout(Some(remaining)).ok()?;
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            eprintln!("zmux: provider ingress failure: frame_deadline");
+            return None;
+        };
+        if let Err(error) = stream.set_read_timeout(Some(remaining)) {
+            eprintln!(
+                "zmux: provider ingress failure: receive_timeout_setup/{:?}",
+                error.kind()
+            );
+            return None;
+        }
         match stream.read(&mut byte) {
             Ok(0) => break,
             Ok(_) if byte[0] == b'\n' => break,
             Ok(_) => {
                 bytes.push(byte[0]);
                 if bytes.len() >= PROVIDER_EVENT_LIMIT {
+                    eprintln!("zmux: provider ingress failure: frame_byte_bound");
                     return None;
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => return None,
+            Err(error) => {
+                eprintln!(
+                    "zmux: provider ingress failure: frame_read/{:?}",
+                    error.kind()
+                );
+                return None;
+            }
         }
     }
-    serde_json::from_slice(&bytes).ok()
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            eprintln!(
+                "zmux: provider ingress failure: frame_decode/{:?}",
+                error.classify()
+            );
+            None
+        }
+    }
 }
 
 struct ProviderSupervision<'a> {
