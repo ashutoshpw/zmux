@@ -173,3 +173,9 @@ long TMPDIR; it reproduced event-route fallback before this correction and
 passes afterward. The fake daemon WebSocket fixture uses the same short-parent
 rule. Forced termination can still retain private adapter files for review;
 normal teardown removes only the invocation's owned directory.
+
+The synthetic daemon is started explicitly during test setup. Its normal status
+query only reports an existing daemon, matching the production precondition;
+cold daemon creation no longer shares the two-second status-probe budget. The
+fixture's bounded startup phase is separate and does not widen production RPC
+or status deadlines.

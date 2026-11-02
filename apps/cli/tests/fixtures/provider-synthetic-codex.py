@@ -247,7 +247,7 @@ def app_server():
             pass
 
 
-def daemon_version():
+def daemon_version(start=False):
     path = os.environ["ZMUX_FAKE_CODEX_SOCKET"]
     pid_path = os.environ["ZMUX_FAKE_CODEX_DAEMON_PID"]
     try:
@@ -259,6 +259,9 @@ def daemon_version():
             return
     except (OSError, ValueError):
         pass
+    if not start:
+        print(json.dumps({"status": "stopped"}), flush=True)
+        return
     daemon = subprocess.Popen(
         [sys.executable, __file__, "app-server-daemon"],
         stdin=subprocess.DEVNULL,
@@ -268,7 +271,7 @@ def daemon_version():
     )
     with open(pid_path, "w", encoding="ascii") as output:
         output.write(str(daemon.pid))
-    deadline = time.monotonic() + 2.0
+    deadline = time.monotonic() + 10.0
     while not os.path.exists(path) and time.monotonic() < deadline:
         time.sleep(0.01)
     if not os.path.exists(path):
@@ -376,6 +379,9 @@ def provider():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["fixture-daemon-start"]:
+        daemon_version(start=True)
+        raise SystemExit(0)
     if sys.argv[1:4] == ["app-server", "daemon", "version"]:
         daemon_version()
         raise SystemExit(0)

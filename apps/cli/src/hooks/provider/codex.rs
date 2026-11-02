@@ -589,7 +589,8 @@ fn daemon_socket_path(executable: &Path) -> Result<PathBuf, CliError> {
         Command::new(executable).args(["app-server", "daemon", "version"]),
         Instant::now() + RPC_TIMEOUT,
         &cancellation,
-    )?;
+    )
+    .map_err(|_| CliError("Codex daemon status probe did not complete within its bounds".into()))?;
     if output.status != zmux_session_runtime::child::ExitObservation::Exited(0) {
         return Err(CliError(
             "Codex does not report a running shared app-server daemon".into(),

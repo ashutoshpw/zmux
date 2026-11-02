@@ -322,7 +322,7 @@ fn managed_ssh_codex_uses_root_thread_events_and_ignores_stop_hook_decisions() {
         .unwrap();
     screen(&socket, surface, |snapshot| snapshot["state"] == "running");
     let command = format!(
-        "export PATH='{}':$PATH; export ZMUX_FAKE_CODEX_STATE='{}'; export ZMUX_FAKE_CODEX_REPORT='{}'; export ZMUX_FAKE_CODEX_CALLS='{}'; export ZMUX_FAKE_CODEX_STOP_PROBE='{}'; export ZMUX_FAKE_CODEX_STOP_RESULT='{}'; export ZMUX_FAKE_CODEX_RELEASE='{}'; export ZMUX_FAKE_CODEX_SOCKET='{}'; export ZMUX_FAKE_CODEX_DAEMON_PID='{}'; codex\n",
+        "export PATH='{}':$PATH; export ZMUX_FAKE_CODEX_STATE='{}'; export ZMUX_FAKE_CODEX_REPORT='{}'; export ZMUX_FAKE_CODEX_CALLS='{}'; export ZMUX_FAKE_CODEX_STOP_PROBE='{}'; export ZMUX_FAKE_CODEX_STOP_RESULT='{}'; export ZMUX_FAKE_CODEX_RELEASE='{}'; export ZMUX_FAKE_CODEX_SOCKET='{}'; export ZMUX_FAKE_CODEX_DAEMON_PID='{}'; command codex fixture-daemon-start && codex\n",
         bin.display(),
         state.display(),
         report.display(),

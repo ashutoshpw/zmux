@@ -681,3 +681,19 @@ Remaining limitations and acceptance gaps:
 
 - RUST_TEST_THREADS=2 scripts/check r6 completed with exit 0. Log: /tmp/zmux-provider-support-check-r6.log. This includes the long-TMPDIR real local adapter regression, existing daemon fixture, all local/SSH provider tests, workspace tests, strict Clippy, notices and native bridge ABI gates.
 - The scoped path correction and its evidence will be committed/pushed for fresh exact-source Foundation and universal development workflows. Source 8523529 remains an unsuccessful hosted attempt; no app artifact from it is accepted.
+
+### Corrected source pushed for universal build
+
+- Commit b1e302b47004a3d39596e426650f9248aa1e3115 contains the short Codex fixture and private local invocation transport paths plus the long-TMPDIR regression. Full scripts/check r6 passed before commit/push.
+- The new exact-source push will run Foundation and universal macOS packaging. A fresh bounded delivery-verification task owns the build receipt; no source changes are planned while CI runs. The only additional in-scope worktree change is task-reference whitespace normalization, to be included with final evidence.
+
+### Existing-daemon fixture setup correction
+
+- Hosted source b1e302b passed Ubuntu Foundation but failed macOS local Codex setup when the bounded daemon-status command expired. The generic helper's legacy PR lookup wording was misleading: this path was the Codex external status probe, not a route or GitHub PR operation. Its failure poisoned the test fixture mutex and caused later cascades.
+- The synthetic CLI previously cold-started its daemon during app-server daemon version, consuming the same two-second budget intended to read an existing daemon. The fixture now starts its own daemon explicitly in setup, with a separate bounded ten-second readiness phase; normal status queries only report running/stopped. Local and managed SSH scenarios both use that setup. No production RPC/status timeout was increased.
+- The actual local Desktop/Codex long-TMPDIR scenario passes after this correction (/tmp/zmux-provider-existing-daemon-fixture.log). The production status-probe error is now provider-specific instead of exposing the generic helper's PR metadata wording. Full scripts/check r7 follows before commit/push.
+
+### Portable validation passed for existing-daemon fixture setup
+
+- RUST_TEST_THREADS=2 scripts/check r7 completed with exit 0 after moving synthetic daemon creation into explicit fixture setup. Log: /tmp/zmux-provider-support-check-r7.log. Both local and real managed SSH Codex tests passed; normal status probes remain bounded at two seconds and do not start a daemon.
+- The previous b1e302b development job failed the same preflight deadline as Foundation macOS, before app packaging. This is a fixture-contract correction, not an infrastructure retry or a relaxation of provider state/ownership assertions. Fresh exact-source workflows follow the scoped fix commit.

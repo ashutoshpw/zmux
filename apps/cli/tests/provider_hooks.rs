@@ -1878,11 +1878,13 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
             request_id: 71,
             payload: DesktopCommand::Input {
                 session_id,
-                text: "codex\n".into(),
+                text: "command codex fixture-daemon-start && codex\n".into(),
             },
         })
         .unwrap();
-    let output_deadline = Instant::now() + Duration::from_secs(10);
+    // Startup has its own 10 second fixture budget; the production status
+    // probe still requires an already-running daemon within two seconds.
+    let output_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let terminal = terminal_output_for(&running.desktop, session_id);
         if terminal.contains("CODEX_FIXTURE_READY") {
