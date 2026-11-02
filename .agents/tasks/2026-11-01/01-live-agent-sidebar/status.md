@@ -778,3 +778,15 @@ Main inspected the actual c787b1b sidebar PNG against the supplied Herdr PNG. Do
 ### Final portable gate before the next hosted build
 
 `RUST_TEST_THREADS=2 scripts/check` r12 passed (exit 0; `/tmp/zmux-provider-support-check-r12.log`), including workspace tests, strict Clippy, current license inventory and both native bridge ABI checks. The four sRGB presentation tokens were updated during the Rust suite; Linux does not compile or render AppKit, so their acceptance remains the exact-source macOS build and packaged screenshot. Fixture review findings are resolved by the focused failing-before/passing-after evidence above. `git diff --check` passes. Only the scoped CLI fixture/tests, native smoke/palette and current task evidence are staged; unrelated cloud-origin/profile-lifecycle work is excluded. No final app artifact is accepted yet.
+
+### Exact-source hosted acceptance started
+
+Scoped commit `96bd32c0370c4b78c95b5172e271f26c2812d0d9` was committed and pushed to `origin/main` after r12 passed, without bypassing hooks. The only remaining unrelated dirty paths at push were the cloud-origin task status and profile-lifecycle workflow/tools. Automatic Foundation and full universal macOS development workflows for this source are now the required acceptance gates. An acceptance worker owns only the delivery reference; main retains plan/status and final screenshot/artifact acceptance. No final artifact is accepted yet.
+
+### 96bd32c hosted gate and fixture readiness correction
+
+Foundation run 41472796069 passed Ubuntu and macOS. Development run 41472796120 passed scheduler builds and Swift typechecking, then its macos-15-arm64 Rust suite failed the recovery table before the partial-frame case connected: `Connection refused (os error 61)`. No universal app or packaged acceptance was produced. The fixture's new startup helper checked socket-file existence, which occurs at `bind()` before `listen()`; it could return inside that interval. Main corrected this small review finding directly: readiness now also requires the existing atomic `phase=listening;error=none` marker written after `listen()`, preserving the three-second startup budget. Timeout diagnostics include the bounded current marker. No production code, case assertions or deadlines changed; the existing recovery cases own the readiness boundary, so no duplicate readiness predicate test or new injection seam was added. Full `scripts/check` r13 is running. The native palette/row fixes remain unverified by packaged acceptance.
+
+### Post-listen readiness portable gate
+
+`RUST_TEST_THREADS=2 scripts/check` r13 passed with exit 0 (`/tmp/zmux-provider-support-check-r13.log`), including both fixture tests, local/SSH provider ownership, workspace tests, strict Clippy, notices and native bridge ABI checks. The readiness change is limited to the existing fixture helper and its bounded timeout description. `git diff --check` passes. The scoped change and current task records are ready for commit/push; fresh exact-source Foundation and universal native acceptance remain required.

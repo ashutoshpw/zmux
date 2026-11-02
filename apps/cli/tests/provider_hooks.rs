@@ -266,6 +266,7 @@ impl SyntheticCodexDaemon {
         loop {
             if fs::symlink_metadata(&daemon.socket)
                 .is_ok_and(|metadata| metadata.file_type().is_socket())
+                && codex_fixture_diagnostics(&daemon.diagnostics) == "phase=listening;error=none"
             {
                 return daemon;
             }
@@ -274,7 +275,8 @@ impl SyntheticCodexDaemon {
             }
             assert!(
                 Instant::now() < deadline,
-                "synthetic Codex fixture did not create its Unix socket"
+                "synthetic Codex fixture did not confirm its listening socket: {}",
+                codex_fixture_diagnostics(&daemon.diagnostics)
             );
             thread::sleep(Duration::from_millis(5));
         }

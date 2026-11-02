@@ -2,7 +2,26 @@
 
 **Updated:** 2026-11-02
 
-**Source:** `c787b1b155cb24fb817164e4a0dd66b1316dfa88`
+**Source:** `96bd32c0370c4b78c95b5172e271f26c2812d0d9`
+
+## Latest exact-source result: 96bd32c
+
+**BLOCKED: no accepted universal macOS development app exists for this source.** Both Foundation jobs passed. The development workflow passed both Linux scheduler builds and Swift typecheck, then failed `scripts/check` in `Validate Rust core and foreign ABI` before universal app compilation, packaged native acceptance, or app artifact upload. The development runner image was `macos-15-arm64`. No same-source retry was started.
+
+- [Foundation checks run 41472796069](https://github.com/ashutoshpw/zmux/actions/runs/41472796069), source SHA `96bd32c0370c4b78c95b5172e271f26c2812d0d9`.
+  - Ubuntu job [125370490000](https://github.com/ashutoshpw/zmux/actions/runs/41472796069/job/125370490000) passed.
+  - macOS job [125370489887](https://github.com/ashutoshpw/zmux/actions/runs/41472796069/job/125370489887) passed.
+- [macOS development build run 41472796120](https://github.com/ashutoshpw/zmux/actions/runs/41472796120), same source SHA.
+  - Scheduler x86_64 job [125370489593](https://github.com/ashutoshpw/zmux/actions/runs/41472796120/job/125370489593), scheduler aarch64 job [125370489827](https://github.com/ashutoshpw/zmux/actions/runs/41472796120/job/125370489827), and Swift typecheck job [125370490307](https://github.com/ashutoshpw/zmux/actions/runs/41472796120/job/125370490307) passed.
+  - Development job [125372318162](https://github.com/ashutoshpw/zmux/actions/runs/41472796120/job/125372318162) failed `Validate Rust core and foreign ABI`. The full downloaded log is `/tmp/zmux-provider-development-mac-96bd32c.log` (823 lines, 109,168 bytes).
+  - `synthetic_codex_fixture_recovers_after_websocket_peer_errors` failed at `apps/cli/tests/provider_hooks.rs:497`. Its exact error was `partial: could not connect fixture peer: Connection refused (os error 61)`. The failure occurred in `fixture_websocket_connect` before the partial-frame write; the buffered-upgrade regression passed, as did `automatic_local_codex_uses_its_exact_real_desktop_terminal_route`.
+  - This recovery table starts a fresh daemon for each case (`provider_hooks.rs:375-384`), so the refusal is not evidence that an earlier malformed/oversized peer killed the listener. Startup currently returns once `symlink_metadata` sees the socket path (`provider_hooks.rs:265-280`). The Python fixture creates that path at `bind`, then calls `listen`, and only afterward writes its `listening` diagnostic (`provider-synthetic-codex.py:318-323`). The source therefore permits the test to connect in the bind-to-listen interval; that is the smallest supported diagnosis for the refusal. The failing branch did not preserve the fixture phase or child-liveness receipt: its per-case temporary directory is removed on drop, and the uploaded failure-artifact step found no files.
+  - Smallest repair for the next source: make `SyntheticCodexDaemon::start` wait for the bounded `phase=listening` marker emitted after `listen`, while continuing to check child liveness and the existing startup deadline. If connection refusal remains, retain the static phase/liveness values at that exact connect failure. Keep the peer recovery cases, frame deadlines, and production observer/deadlines unchanged.
+  - The run artifact list contains only the same-source scheduler helper artifacts and scheduler queue-layout evidence; it contains no universal macOS app ZIP or native diagnostics artifact. The required `zmux-macos-dev-universal-96bd32c0370c4b78c95b5172e271f26c2812d0d9` artifact was not uploaded.
+
+No AppKit package was built, so this source has no packaged screenshot, palette rendering result, sidebar receipt, or system-status-menu receipt. This hosted attempt also establishes no physical-Mac/audio behavior, authenticated provider turns, or Intel runtime behavior. The Foundation results and Linux scheduler artifacts do not clear the failed development gate.
+
+## Previous exact-source result: c787b1b
 
 ## Latest exact-source result
 
