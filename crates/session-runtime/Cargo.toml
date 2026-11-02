@@ -25,6 +25,7 @@ darwin-libproc = "=0.2.0"
 sysctl = "=0.7.1"
 
 [dev-dependencies]
+serde_json.workspace = true
 zmux-session-test-support = { path = "test-support" }
 
 [lints]

@@ -14,6 +14,10 @@ const FILES: &[&str] = &[
     "claude.sh",
     "claude.zsh",
     "claude.fish",
+    "provider.sh",
+    "provider.fish",
+    "provider-launch.py",
+    "provider-opencode-plugin.js",
     "claude-lifecycle-hook.py",
     "claude-lifecycle-notice.py",
     "claude-lifecycle-stream.py",
@@ -24,6 +28,7 @@ const FILES: &[&str] = &[
     "attention",
     "agent-events",
     "agent-events-loss",
+    "agent-lifecycle-generation",
     "claude-auto.lock",
     "agent-lifecycle-active.lock",
     "plugin/.claude-plugin/plugin.json",
@@ -234,6 +239,16 @@ fn bootstrap_script(install_openers: bool, install_remote_lifecycle: bool) -> St
     let files = [
         ("claude.sh", include_str!("shell/claude.sh")),
         ("claude.fish", include_str!("shell/claude.fish")),
+        ("provider.sh", include_str!("shell/provider.sh")),
+        ("provider.fish", include_str!("shell/provider.fish")),
+        (
+            "provider-launch.py",
+            include_str!("shell/provider-launch.py"),
+        ),
+        (
+            "provider-opencode-plugin.js",
+            include_str!("shell/provider-opencode-plugin.js"),
+        ),
         (
             "plugin/.claude-plugin/plugin.json",
             r#"{"name":"zmux-attention","version":"0.1.0","description":"Terminal-local completion and attention notifications"}"#,

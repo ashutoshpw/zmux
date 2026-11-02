@@ -60,8 +60,11 @@ ZMUX_SHELL_INTEGRATION_DIRECTORY=$zmux_private_root
 export ZMUX_SHELL_INTEGRATION_DIRECTORY
 zmux_shell_cleanup() {
     rm -f "$zmux_private_root/claude.sh" "$zmux_private_root/claude.zsh" "$zmux_private_root/claude.fish" \
+        "$zmux_private_root/provider.sh" "$zmux_private_root/provider.fish" \
+        "$zmux_private_root/provider-launch.py" "$zmux_private_root/provider-opencode-plugin.js" \
         "$zmux_private_root/claude-lifecycle-hook.py" "$zmux_private_root/claude-lifecycle-notice.py" \
         "$zmux_private_root/claude-lifecycle-stream.py" "$zmux_private_root/agent-lifecycle-active.lock" \
+        "$zmux_private_root/agent-lifecycle-generation" \
         "$zmux_private_root/.zshenv" "$zmux_private_root/.zprofile" \
         "$zmux_private_root/.zshrc" "$zmux_private_root/env" \
         "$zmux_private_root/attention" "$zmux_private_root/agent-events" \
@@ -156,7 +159,7 @@ case "${zmux_shell##*/}" in
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude zmux_refresh_openers; exec "$@"' zmux "$zmux_shell" "$@"
+        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude codex opencode zmux_refresh_openers; exec "$@"' zmux "$zmux_shell" "$@"
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}

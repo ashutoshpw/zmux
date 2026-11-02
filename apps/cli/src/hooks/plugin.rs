@@ -12,9 +12,21 @@ use std::{
 };
 use uuid::Uuid;
 
-pub(super) const SUPPORTED_VERSION: &str = "2.1.301";
+pub(super) const MIN_SUPPORTED_VERSION: &str = "2.1.301";
+pub(super) const MAX_SUPPORTED_VERSION: &str = "2.1.316";
 const RECORD: &str = "installation.json";
 const LIMIT: usize = 65536;
+
+pub(super) fn supports_provider_version(version: &str) -> bool {
+    let Some((major_minor, patch)) = version.rsplit_once('.') else {
+        return false;
+    };
+    let Ok(patch_number) = patch.parse::<u16>() else {
+        return false;
+    };
+    major_minor == "2.1" && patch_number.to_string() == patch && (301..=316).contains(&patch_number)
+}
+
 pub(super) struct Directory(pub File);
 impl Directory {
     pub fn open(path: &Path, create: bool) -> Result<Self, CliError> {
@@ -278,6 +290,12 @@ pub(super) struct Binary {
     size: u64,
     modified: [i64; 2],
 }
+
+pub(super) struct VerifiedProvider {
+    pub binary: Binary,
+    pub version: String,
+}
+
 pub(super) fn binary(path: &Path) -> Result<Binary, CliError> {
     let path = path.canonicalize()?;
     let mut file = File::from(
@@ -360,7 +378,7 @@ fn record(root: &Directory) -> Result<Record, CliError> {
         || value.generations.iter().any(|g| {
             g.generation.is_nil()
                 || !unique.insert(g.generation)
-                || g.provider_version != SUPPORTED_VERSION
+                || !supports_provider_version(&g.provider_version)
         })
     {
         return Err(CliError(
@@ -420,7 +438,16 @@ fn generation(root: &Directory, i: &Installation) -> Result<Directory, CliError>
     dir.verify_owned("runtime.lock", &i.files.runtime_lock, b"", false)?;
     Ok(dir)
 }
-pub(super) fn install(path: &Path, provider: Binary) -> Result<Value, CliError> {
+pub(super) fn install(path: &Path, provider: VerifiedProvider) -> Result<Value, CliError> {
+    let VerifiedProvider {
+        binary: provider_binary,
+        version: provider_version,
+    } = provider;
+    if !metadata_matches(&provider_binary) {
+        return Err(CliError(
+            "provider executable changed after compatibility preflight".into(),
+        ));
+    }
     let adapter = binary(&env::current_exe()?)?;
     let root = Directory::open(path, true)?;
     let _lock = root.lock("installation.lock", false)?;
@@ -435,7 +462,11 @@ pub(super) fn install(path: &Path, provider: Binary) -> Result<Value, CliError> 
     };
     if let Some(current) = owned.generations.last() {
         generation(&root, current)?;
-        if owned.enabled && current.adapter == adapter && current.provider == provider {
+        if owned.enabled
+            && current.adapter == adapter
+            && current.provider == provider_binary
+            && current.provider_version == provider_version
+        {
             return Ok(
                 json!({"installed":true,"changed":false,"generation":current.generation,"session_only":true}),
             );
@@ -450,8 +481,8 @@ pub(super) fn install(path: &Path, provider: Binary) -> Result<Value, CliError> 
     let mut installed = Installation {
         generation: Uuid::new_v4(),
         adapter,
-        provider,
-        provider_version: SUPPORTED_VERSION.into(),
+        provider: provider_binary,
+        provider_version,
         files: OwnedFiles::default(),
     };
     let dir = root.child(OsStr::new(&installed.generation.to_string()), true)?;

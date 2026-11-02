@@ -21,6 +21,7 @@ FIFO_WAIT_SECONDS = 20.0
 RECEIPT_WAIT_SECONDS = 1.8
 MAX_PENDING_RECEIPTS = 64
 MAX_SEEN_EVENT_IDS = 256
+MAX_PROVIDER_ID_BYTES = 256
 
 
 def send(frame):
@@ -84,15 +85,84 @@ def activate(nonce, root):
             except OSError:
                 pass
         return None
-    send(
-        {
-            "kind": "active",
-            "version": VERSION,
-            "nonce": nonce,
-            "generation": str(uuid.UUID(hex=generation)),
-        }
-    )
+    try:
+        publish_generation(root, generation)
+        send(
+            {
+                "kind": "active",
+                "version": VERSION,
+                "nonce": nonce,
+                "generation": str(uuid.UUID(hex=generation)),
+            }
+        )
+    except Exception:
+        remove_generation(root, generation)
+        os.close(descriptor)
+        return None
     return descriptor, generation
+
+
+def generation_marker_path(root):
+    return os.path.join(root, "agent-lifecycle-generation")
+
+
+def publish_generation(root, generation):
+    value = str(uuid.UUID(hex=generation)).encode("ascii") + b"\n"
+    destination = generation_marker_path(root)
+    temporary = os.path.join(root, ".generation-" + uuid.uuid4().hex)
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise OSError("unsafe managed lifecycle generation marker")
+        if os.write(descriptor, value) != len(value):
+            raise OSError("managed lifecycle generation marker write failed")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.replace(temporary, destination)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def remove_generation(root, generation):
+    path = generation_marker_path(root)
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size > 64
+        ):
+            return
+        value = os.read(descriptor, 65).decode("ascii").strip()
+        if uuid.UUID(value).hex != generation:
+            return
+        current = os.stat(path, follow_symlinks=False)
+        if current.st_dev == metadata.st_dev and current.st_ino == metadata.st_ino:
+            os.unlink(path)
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError, TypeError):
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def receipt_path(root, event_id):
@@ -224,6 +294,68 @@ def remember_event_id(seen, event_hex):
     return True
 
 
+def valid_provider_id(value):
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value.encode("utf-8")) <= MAX_PROVIDER_ID_BYTES
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
+def valid_provider_observation(observation):
+    if not isinstance(observation, dict) or set(observation) != {
+        "provider",
+        "scope",
+        "session_id",
+        "turn_id",
+        "state",
+        "transition",
+        "marker",
+    }:
+        return False
+    provider = observation.get("provider")
+    scope = observation.get("scope")
+    session_id = observation.get("session_id")
+    turn_id = observation.get("turn_id")
+    state = observation.get("state")
+    transition = observation.get("transition")
+    marker = observation.get("marker")
+    if (
+        provider not in ("codex", "opencode")
+        or scope != "root"
+        or not valid_provider_id(session_id)
+        or (turn_id is not None and not valid_provider_id(turn_id))
+        or state not in ("working", "waiting", "idle")
+        or transition not in (
+            "snapshot",
+            "state_changed",
+            "turn_completed",
+            "turn_failed",
+            "turn_interrupted",
+        )
+        or marker not in ("live", "baseline", "recovery")
+        or (state in ("working", "waiting") and turn_id is None)
+    ):
+        return False
+    return not (
+        transition in ("turn_completed", "turn_failed", "turn_interrupted")
+        and (state != "idle" or turn_id is None)
+    ) and not (transition == "turn_completed" and marker != "live")
+
+
+def send_gap(nonce, generation, sequence):
+    send(
+        {
+            "kind": "gap",
+            "version": VERSION,
+            "nonce": nonce,
+            "generation": str(uuid.UUID(hex=generation)),
+            "sequence": sequence,
+        }
+    )
+
+
 def main():
     nonce_argument = sys.argv[1] if len(sys.argv) == 2 else ""
     nonce = uuid_hex(nonce_argument)
@@ -312,34 +444,78 @@ def main():
                 )
             if loss_reader in readable and os.read(loss_reader, 4096):
                 sequence += 1
-                send(
-                    {
-                        "kind": "gap",
-                        "version": VERSION,
-                        "nonce": nonce,
-                        "generation": str(uuid.UUID(hex=generation)),
-                        "sequence": sequence,
-                    }
-                )
+                send_gap(nonce, generation, sequence)
                 return 74
             if reader in readable:
                 chunk = os.read(reader, 4096)
                 if chunk:
                     fifo_pending.extend(chunk)
                     if len(fifo_pending) > MAX_LINE_BYTES and b"\n" not in fifo_pending:
+                        sequence += 1
+                        send_gap(nonce, generation, sequence)
                         return 73
                     while b"\n" in fifo_pending:
                         line, _, remainder = fifo_pending.partition(b"\n")
                         fifo_pending[:] = remainder
-                        if not line or len(line) > MAX_LINE_BYTES:
+                        if not line:
                             continue
+                        if len(line) > MAX_LINE_BYTES:
+                            sequence += 1
+                            send_gap(nonce, generation, sequence)
+                            return 73
                         try:
                             supplied = json.loads(line)
                         except (ValueError, UnicodeDecodeError):
+                            sequence += 1
+                            send_gap(nonce, generation, sequence)
+                            return 73
+                        if not isinstance(supplied, dict):
+                            sequence += 1
+                            send_gap(nonce, generation, sequence)
+                            return 73
+                        if supplied.get("nonce") != nonce:
+                            continue
+                        # Protocol v3 Claude hooks predate the provider-state
+                        # extension and do not carry a stream generation. Keep
+                        # that existing envelope valid; provider observations
+                        # always require their explicit generation fence.
+                        if "provider_observation" in supplied or "generation" in supplied:
+                            supplied_generation = uuid_hex(supplied.get("generation"))
+                            if supplied_generation is None:
+                                sequence += 1
+                                send_gap(nonce, generation, sequence)
+                                return 73
+                            if supplied_generation != generation:
+                                continue
+                        if "provider_observation" in supplied:
+                            if set(supplied) != {"nonce", "generation", "provider_observation"} or not valid_provider_observation(supplied["provider_observation"]):
+                                sequence += 1
+                                send_gap(nonce, generation, sequence)
+                                return 73
+                            sequence += 1
+                            send(
+                                {
+                                    "kind": "provider_state",
+                                    "version": VERSION,
+                                    "nonce": nonce,
+                                    "generation": str(uuid.UUID(hex=generation)),
+                                    "sequence": sequence,
+                                    "observation": supplied["provider_observation"],
+                                }
+                            )
                             continue
                         if (
-                            not isinstance(supplied, dict)
-                            or supplied.get("nonce") != nonce
+                            set(supplied).difference(
+                                {
+                                    "nonce",
+                                    "generation",
+                                    "event",
+                                    "event_id",
+                                    "receipt_required",
+                                    "receipt_requested",
+                                    "receipt_deadline",
+                                }
+                            )
                             or not isinstance(supplied.get("event"), dict)
                         ):
                             continue
@@ -376,15 +552,7 @@ def main():
                                 # dropped. Fence this generation so the desktop
                                 # publishes Unknown before the evidence ages out.
                                 sequence += 1
-                                send(
-                                    {
-                                        "kind": "gap",
-                                        "version": VERSION,
-                                        "nonce": nonce,
-                                        "generation": str(uuid.UUID(hex=generation)),
-                                        "sequence": sequence,
-                                    }
-                                )
+                                send_gap(nonce, generation, sequence)
                                 return 74
                             pending[event_hex] = (path, receipt_deadline)
                         sequence += 1
@@ -416,6 +584,7 @@ def main():
                 )
                 next_heartbeat = now + HEARTBEAT_SECONDS
     finally:
+        remove_generation(root, generation)
         os.close(reader)
         os.close(writer_hold)
         os.close(loss_reader)

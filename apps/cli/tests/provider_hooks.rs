@@ -25,8 +25,10 @@ use std::{
     time::{Duration, Instant},
 };
 use zmux_desktop_runtime::{
-    Command as DesktopCommand, Desktop, Request, Shell, agent_lifecycle::Provider,
-    attention::DesktopDeliveryState, control::ControlServer,
+    Command as DesktopCommand, Desktop, Request, Shell,
+    agent_lifecycle::{Activity, AlertKind, Connection, Provider},
+    attention::DesktopDeliveryState,
+    control::ControlServer,
 };
 const ROUTE_ENV: &str = "ZMUX_CLAUDE_EVENT_SOCKET";
 // A fork in another test thread can transiently inherit a writable executable
@@ -118,6 +120,77 @@ fn terminal_output_for(desktop: &Desktop, session_id: zmux_workspace_core::Sessi
         })
         .unwrap_or_else(|| "<terminal snapshot unavailable>".into())
 }
+
+fn wait_local_codex(
+    desktop: &Desktop,
+    predicate: impl Fn(&zmux_desktop_runtime::agent_lifecycle::Agent) -> bool,
+    context: &str,
+) -> zmux_desktop_runtime::agent_lifecycle::Agent {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let snapshot = desktop.snapshot().unwrap();
+        if let Some(agent) = snapshot
+            .agent_lifecycle
+            .iter()
+            .find(|agent| agent.provider == Provider::CodexLocal && predicate(agent))
+        {
+            return agent.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{context}; provider snapshot={:?}",
+            snapshot.agent_lifecycle
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_local_provider(
+    desktop: &Desktop,
+    provider: Provider,
+    predicate: impl Fn(&zmux_desktop_runtime::agent_lifecycle::Agent) -> bool,
+    context: &str,
+) -> zmux_desktop_runtime::agent_lifecycle::Agent {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let snapshot = desktop.snapshot().unwrap();
+        if let Some(agent) = snapshot
+            .agent_lifecycle
+            .iter()
+            .find(|agent| agent.provider == provider && predicate(agent))
+        {
+            return agent.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{context}; provider snapshot={:?}",
+            snapshot.agent_lifecycle
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn local_codex_completion_count(desktop: &Desktop) -> usize {
+    desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|event| {
+            event.provider == Provider::CodexLocal && event.kind == AlertKind::Completed
+        })
+        .count()
+}
+
+fn local_provider_alert_count(desktop: &Desktop, provider: Provider, kind: AlertKind) -> usize {
+    desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|event| event.provider == provider && event.kind == kind)
+        .count()
+}
 impl Drop for RunningDesktop {
     fn drop(&mut self) {
         if let Some(server) = self.server.take() {
@@ -155,7 +228,11 @@ impl Directory {
         if p.exists() {
             return p;
         }
-        fs::write(&p,"#!/bin/sh\nif [ \"$1\" = --version ]; then printf '2.1.301 (Claude Code)\\n'; else printf invoked > \"$FIXTURE_PROVIDER_CALLED\"; fi\n").unwrap();
+        fs::write(
+            &p,
+            "#!/bin/sh\ncase \"$1\" in\n  --version) printf '2.1.301 (Claude Code)\\n' ;;\n  --help) printf '%s\\n' '  --plugin-dir <path> Load a plugin for this session (repeatable:' '    --plugin-dir A --plugin-dir B)' ;;\n  *) printf invoked > \"$FIXTURE_PROVIDER_CALLED\" ;;\nesac\n",
+        )
+        .unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o700)).unwrap();
         p
     }
@@ -190,6 +267,30 @@ impl Directory {
             .output()
             .unwrap(),
         )
+    }
+    fn install_provider(
+        &self,
+        provider: &Path,
+        version: &str,
+        help: &str,
+        replacement: Option<&Path>,
+    ) -> Output {
+        let mut command = self.command(&[
+            "hooks",
+            "claude",
+            "install",
+            "--directory",
+            self.plugin().to_str().unwrap(),
+            "--provider",
+            provider.to_str().unwrap(),
+        ]);
+        command
+            .env("FIXTURE_PROVIDER_VERSION", version)
+            .env("FIXTURE_PROVIDER_HELP", help);
+        if let Some(replacement) = replacement {
+            command.env("FIXTURE_PROVIDER_REPLACEMENT", replacement);
+        }
+        command.output().unwrap()
     }
     fn call(&self, verb: &str) -> Value {
         decoded(
@@ -631,6 +732,12 @@ fn owned_plugin_is_idempotent_and_uninstall_preserves_unrelated_provider_setting
     let second = dir.install();
     assert_eq!(second["changed"], false);
     assert_eq!(first["generation"], second["generation"]);
+    let installation: Value =
+        serde_json::from_slice(&fs::read(dir.plugin().join("installation.json")).unwrap()).unwrap();
+    assert_eq!(
+        installation["generations"][0]["provider_version"], "2.1.301",
+        "existing 2.1.301 installations retain their actual version and remain idempotent"
+    );
     assert_eq!(dir.call("status")["installed"], true);
     assert_eq!(fs::read(unrelated.join("settings.json")).unwrap(), sentinel);
     let result = dir.call("uninstall");
@@ -640,6 +747,73 @@ fn owned_plugin_is_idempotent_and_uninstall_preserves_unrelated_provider_setting
     assert_eq!(dir.call("uninstall")["cleanup_pending"], false);
     assert_eq!(fs::read(unrelated.join("settings.json")).unwrap(), sentinel);
 }
+
+#[test]
+fn provider_preflight_rejects_future_versions_missing_repeatability_and_replaced_executables() {
+    let repeatable_help = "--plugin-dir <path> Load a plugin for this session (repeatable: --plugin-dir A --plugin-dir B)";
+    let cases = [
+        (
+            "future patch",
+            "2.1.317",
+            repeatable_help,
+            false,
+            "reviewed patch range",
+        ),
+        (
+            "missing repeatability capability",
+            "2.1.301",
+            "--plugin-dir <path> Load a plugin for this session",
+            false,
+            "repeatable --plugin-dir",
+        ),
+        (
+            "executable replaced during help preflight",
+            "2.1.301",
+            repeatable_help,
+            true,
+            "changed during --help preflight",
+        ),
+    ];
+
+    for (case, version, help, replace_during_help, expected_error) in cases {
+        let dir = Directory::new();
+        let provider = dir.path.join("synthetic-provider");
+        fs::write(
+            &provider,
+            "#!/bin/sh\ncase \"$1\" in\n  --version) printf '%s (Claude Code)\\n' \"$FIXTURE_PROVIDER_VERSION\" ;;\n  --help) if [ -n \"${FIXTURE_PROVIDER_REPLACEMENT-}\" ]; then /bin/mv \"$FIXTURE_PROVIDER_REPLACEMENT\" \"$0\"; fi; printf '%s\\n' \"$FIXTURE_PROVIDER_HELP\" ;;\n  *) printf started > \"$FIXTURE_PROVIDER_CALLED\" ;;\nesac\n",
+        )
+        .unwrap();
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+        let replacement = dir.path.join("replacement-provider");
+        if replace_during_help {
+            fs::write(
+                &replacement,
+                "#!/bin/sh\nprintf started > \"$FIXTURE_PROVIDER_CALLED\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(&replacement, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        let output = dir.install_provider(
+            &provider,
+            version,
+            help,
+            replace_during_help.then_some(replacement.as_path()),
+        );
+        assert!(!output.status.success(), "{case} unexpectedly installed");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains(expected_error),
+            "{case} failed for an unexpected reason: {error}"
+        );
+        assert!(!dir.plugin().exists(), "{case} published a plugin");
+        assert!(
+            !dir.path.join("provider-called").exists(),
+            "{case} unexpectedly started Claude"
+        );
+    }
+}
+
 #[test]
 fn changed_or_symlinked_plugin_files_are_retained_after_admissions_are_disabled() {
     for substitute in [false, true] {
@@ -1068,6 +1242,10 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
     assert_eq!(
         retained_installation["enabled"], true,
         "active-provider cleanup must retain lifecycle admission as well as plugin files"
+    );
+    assert_eq!(
+        retained_installation["generations"][0]["provider_version"], "2.1.316",
+        "installation metadata records the provider version discovered by the CLI"
     );
 
     let arguments: Vec<_> = fs::read_to_string(&args_report)
@@ -1510,7 +1688,812 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
 }
 
 #[test]
-fn codex_lifecycle_install_is_explicitly_rejected() {
+fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route() {
+    let dir = Directory::new();
+    let bin = dir.path.join("provider-bin");
+    fs::create_dir(&bin).unwrap();
+    let codex = bin.join("codex");
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-synthetic-codex.py"),
+        &codex,
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let state = dir.path.join("provider-state");
+    let report = dir.path.join("provider-config-report");
+    let calls = dir.path.join("provider-calls");
+    let foreign_probe = dir.path.join("foreign-probe");
+    let foreign_ack = dir.path.join("foreign-ack");
+    let stop_probe = dir.path.join("stop-probe");
+    let stop_result = dir.path.join("stop-result");
+    let release = dir.path.join("provider-release");
+    let socket = dir.path.join("codex-app-server.sock");
+    let daemon_pid = dir.path.join("codex-app-server.pid");
+    fs::write(&state, "idle").unwrap();
+
+    let private_contents = dir.path.join("deps");
+    fs::create_dir(&private_contents).unwrap();
+    let test_binary = std::env::current_exe().unwrap();
+    let private_test_binary = private_contents.join(test_binary.file_name().unwrap());
+    fs::copy(&test_binary, &private_test_binary).unwrap();
+    fs::set_permissions(&private_test_binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut paths = vec![bin, PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    let path = std::env::join_paths(paths).unwrap();
+    let mut child = Command::new(private_test_binary);
+    child.args([
+        "--ignored",
+        "--exact",
+        "automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child",
+        "--nocapture",
+    ]);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("ZMUX_") {
+            child.env_remove(name);
+        }
+    }
+    child
+        .env("HOME", &dir.path)
+        .env("PATH", path)
+        .env("CODEX_HOME", dir.path.join("codex-home"))
+        .env("FIXTURE_LOCAL_CODEX_STATE", state)
+        .env("FIXTURE_LOCAL_CODEX_REPORT", report)
+        .env("FIXTURE_LOCAL_CODEX_CALLS", calls)
+        .env("FIXTURE_LOCAL_CODEX_FOREIGN_PROBE", foreign_probe)
+        .env("FIXTURE_LOCAL_CODEX_FOREIGN_ACK", foreign_ack)
+        .env("FIXTURE_LOCAL_CODEX_STOP_PROBE", stop_probe)
+        .env("FIXTURE_LOCAL_CODEX_STOP_RESULT", stop_result)
+        .env("FIXTURE_LOCAL_CODEX_RELEASE", release)
+        .env("FIXTURE_LOCAL_CODEX_SOCKET", socket)
+        .env("FIXTURE_LOCAL_CODEX_DAEMON_PID", daemon_pid)
+        .env("FIXTURE_LOCAL_CODEX_KEEP_DAEMON", "1")
+        .env_remove("XDG_RUNTIME_DIR");
+    let output = child.output().unwrap();
+    assert!(
+        output.status.success(),
+        "local Codex Desktop route regression failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "invoked by the parent test with an isolated Codex fixture and HOME"]
+fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
+    let root = PathBuf::from(std::env::var_os("HOME").expect("private fixture HOME"));
+    let contents_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    let _bundled_cli = BundledCli::new(&contents_dir);
+    let state = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_STATE").unwrap());
+    let report = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_REPORT").unwrap());
+    let calls = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_CALLS").unwrap());
+    let foreign_probe =
+        PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_FOREIGN_PROBE").unwrap());
+    let foreign_ack = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_FOREIGN_ACK").unwrap());
+    let stop_probe = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_STOP_PROBE").unwrap());
+    let stop_result = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_STOP_RESULT").unwrap());
+    let release = PathBuf::from(std::env::var_os("FIXTURE_LOCAL_CODEX_RELEASE").unwrap());
+    let shell_rc = root.join("codex-shell.rc");
+    fs::write(
+        &shell_rc,
+        format!(
+            "PS1=\nexport ZMUX_FAKE_CODEX_STATE='{}'\nexport ZMUX_FAKE_CODEX_REPORT='{}'\nexport ZMUX_FAKE_CODEX_CALLS='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_PROBE='{}'\nexport ZMUX_FAKE_CODEX_FOREIGN_ACK='{}'\nexport ZMUX_FAKE_CODEX_STOP_PROBE='{}'\nexport ZMUX_FAKE_CODEX_STOP_RESULT='{}'\nexport ZMUX_FAKE_CODEX_RELEASE='{}'\nexport ZMUX_FAKE_CODEX_SOCKET='{}'\nexport ZMUX_FAKE_CODEX_DAEMON_PID='{}'\nexport ZMUX_FAKE_CODEX_KEEP_DAEMON=1\nexport PATH='{}':\"$PATH\"\nprintf 'LOCAL_CODEX_SHELL_READY\\n'\n",
+            state.display(),
+            report.display(),
+            calls.display(),
+            foreign_probe.display(),
+            foreign_ack.display(),
+            stop_probe.display(),
+            stop_result.display(),
+            release.display(),
+            std::env::var_os("FIXTURE_LOCAL_CODEX_SOCKET")
+                .map(PathBuf::from)
+                .unwrap()
+                .display(),
+            std::env::var_os("FIXTURE_LOCAL_CODEX_DAEMON_PID")
+                .map(PathBuf::from)
+                .unwrap()
+                .display(),
+            root.join("provider-bin").display(),
+        ),
+    )
+    .unwrap();
+    let baseline_shell_roots = shell_integration_roots();
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                shell_rc.to_string_lossy().into_owned(),
+                "-i".into(),
+            ],
+            cwd: Some(root.clone()),
+        })
+        .unwrap(),
+    );
+    #[cfg(target_os = "macos")]
+    let control_socket = root.join("Library/Application Support/zmux/control.sock");
+    #[cfg(not(target_os = "macos"))]
+    let control_socket = root.join(".local/run/zmux/control.sock");
+    let server = ControlServer::start(&control_socket, Arc::clone(&desktop)).unwrap();
+    let mut running = RunningDesktop {
+        desktop,
+        server: Some(server),
+    };
+
+    let startup_deadline = Instant::now() + Duration::from_secs(10);
+    let (session_id, _shell_root) = loop {
+        let snapshot = running.desktop.snapshot().unwrap();
+        let session_id = snapshot
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| pane.surfaces.iter())
+            .find_map(|surface| surface.session_id);
+        if let Some(session_id) = session_id {
+            let ready = snapshot.control_frames.iter().any(|frame| {
+                frame.session_id == session_id
+                    && frame.snapshot.as_ref().is_some_and(|terminal| {
+                        terminal.state == zmux_session_runtime::State::Running
+                            && terminal
+                                .viewport
+                                .contents
+                                .contains("LOCAL_CODEX_SHELL_READY")
+                    })
+            });
+            let shell_root = shell_integration_roots()
+                .difference(&baseline_shell_roots)
+                .find(|path| path.join("provider-launch.py").is_file())
+                .cloned();
+            if ready && let Some(shell_root) = shell_root {
+                break (session_id, shell_root);
+            }
+        }
+        assert!(
+            Instant::now() < startup_deadline,
+            "real Desktop Codex terminal did not reach interactive startup"
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 71,
+            payload: DesktopCommand::Input {
+                session_id,
+                text: "codex\n".into(),
+            },
+        })
+        .unwrap();
+    let output_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, session_id);
+        if terminal.contains("CODEX_FIXTURE_READY") {
+            break;
+        }
+        assert!(
+            Instant::now() < output_deadline,
+            "automatic Codex launch did not start in its Desktop terminal: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let initial = wait_local_codex(
+        &running.desktop,
+        |agent| agent.activity == Activity::Idle,
+        "local Codex baseline did not attach to the existing root thread",
+    );
+    assert_eq!(initial.connection, Connection::Connected);
+    assert_eq!(initial.session_id, session_id);
+    assert_eq!(initial.prompt_id, None);
+    let config_report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(config_report["existing_session_start_preserved"], true);
+    assert_eq!(config_report["zmux_session_start_added"], true);
+    assert_eq!(config_report["stop_override_added"], false);
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "launch\n");
+    assert_eq!(local_codex_completion_count(&running.desktop), 0);
+
+    fs::write(&foreign_probe, b"send exact foreign thread notification").unwrap();
+    let foreign_deadline = Instant::now() + Duration::from_secs(3);
+    while !foreign_ack.is_file() {
+        assert!(
+            Instant::now() < foreign_deadline,
+            "synthetic daemon did not send the foreign thread notification"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(150));
+    let after_foreign = running.desktop.snapshot().unwrap();
+    let local_agents = after_foreign
+        .agent_lifecycle
+        .iter()
+        .filter(|agent| agent.provider == Provider::CodexLocal)
+        .collect::<Vec<_>>();
+    assert_eq!(local_agents.len(), 1);
+    assert_eq!(local_agents[0].activity, Activity::Idle);
+    assert_eq!(local_agents[0].prompt_id, None);
+    assert!(after_foreign.agent_alert_events.is_empty());
+
+    fs::write(&stop_probe, b"attempt unsupported Stop decision").unwrap();
+    let stop_deadline = Instant::now() + Duration::from_secs(3);
+    while !stop_result.is_file() {
+        assert!(
+            Instant::now() < stop_deadline,
+            "synthetic Codex Stop hook was not exercised"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_ne!(fs::read_to_string(&stop_result).unwrap(), "0");
+    assert_eq!(
+        wait_local_codex(
+            &running.desktop,
+            |agent| agent.activity == Activity::Idle,
+            "Codex Stop hook changed activity without app-server evidence",
+        )
+        .provider_session_id,
+        initial.provider_session_id
+    );
+    assert_eq!(local_codex_completion_count(&running.desktop), 0);
+
+    fs::write(&state, b"start").unwrap();
+    let working = wait_local_codex(
+        &running.desktop,
+        |agent| agent.activity == Activity::Working,
+        "exact Codex root thread did not become Working",
+    );
+    assert_eq!(working.connection, Connection::Connected);
+    assert_eq!(working.provider_session_id, initial.provider_session_id);
+    assert!(working.prompt_id.is_some());
+    assert_eq!(local_codex_completion_count(&running.desktop), 0);
+
+    fs::write(&state, b"complete").unwrap();
+    let completion_deadline = Instant::now() + Duration::from_secs(8);
+    let completed = loop {
+        let snapshot = running.desktop.snapshot().unwrap();
+        let count = snapshot
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::CodexLocal && event.kind == AlertKind::Completed
+            })
+            .count();
+        if count == 1
+            && let Some(agent) = snapshot.agent_lifecycle.iter().find(|agent| {
+                agent.provider == Provider::CodexLocal && agent.activity == Activity::Idle
+            })
+        {
+            break agent.clone();
+        }
+        assert!(
+            Instant::now() < completion_deadline,
+            "local Codex completion was not admitted exactly once: events={:?}",
+            snapshot.agent_alert_events
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(completed.provider_session_id, initial.provider_session_id);
+    assert_eq!(completed.prompt_id, working.prompt_id);
+
+    fs::write(&release, b"exit provider").unwrap();
+    let exit_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, session_id);
+        let snapshot = running.desktop.snapshot().unwrap();
+        let ended = snapshot.agent_lifecycle.iter().find(|agent| {
+            agent.provider == Provider::CodexLocal && agent.connection == Connection::Disconnected
+        });
+        if terminal.contains("CODEX_FIXTURE_DONE")
+            && let Some(ended) = ended
+        {
+            assert_eq!(ended.activity, Activity::Unknown);
+            assert_eq!(
+                snapshot
+                    .agent_alert_events
+                    .iter()
+                    .filter(|event| {
+                        event.provider == Provider::CodexLocal && event.kind == AlertKind::Completed
+                    })
+                    .count(),
+                1
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < exit_deadline,
+            "local Codex exit did not mark its exact provider session disconnected: terminal={terminal:?}; agents={:?}",
+            snapshot.agent_lifecycle
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 72,
+            payload: DesktopCommand::Input {
+                session_id,
+                text: "codex --help\n".into(),
+            },
+        })
+        .unwrap();
+    let help_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, session_id);
+        if terminal.contains("CODEX_HELP_PASSTHROUGH") {
+            assert_eq!(fs::read_to_string(&calls).unwrap(), "launch\n");
+            break;
+        }
+        assert!(
+            Instant::now() < help_deadline,
+            "Codex help was altered by automatic lifecycle setup: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let mut context_findings = Vec::new();
+    for (index, args) in [
+        vec!["--cd", "project-B"],
+        vec!["--profile=selected-profile"],
+        vec!["-C", "project-B"],
+        vec!["-p", "selected-profile"],
+        vec!["mcp", "list"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let marker = format!("CODEX_CONTEXT_CASE_{index}_DONE");
+        running
+            .desktop
+            .submit(Request {
+                version: 1,
+                request_id: 80 + index as u64,
+                payload: DesktopCommand::Input {
+                    session_id,
+                    text: format!(
+                        "codex {}; printf 'CODEX_CONTEXT_CASE_%s_DONE\\n' '{index}'\n",
+                        args.join(" ")
+                    ),
+                },
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !terminal_output_for(&running.desktop, session_id).contains(&marker) {
+            assert!(
+                Instant::now() < deadline,
+                "context invocation did not finish"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+        if report["args"] != json!(args) || report["zmux_session_start_added"] != false {
+            context_findings.push(format!("{args:?} was changed to {:?}", report["args"]));
+        }
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap().lines().count(),
+            index + 2
+        );
+    }
+    assert!(
+        context_findings.is_empty(),
+        "context/subcommand arguments changed: {context_findings:?}"
+    );
+    running.shutdown();
+}
+
+#[test]
+fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration() {
+    let dir = Directory::new();
+    let bin = dir.path.join("provider-bin");
+    fs::create_dir(&bin).unwrap();
+    let config = dir.path.join("user-opencode-config");
+    let plugins = config.join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&plugins, fs::Permissions::from_mode(0o700)).unwrap();
+    let config_contents = r#"{"model":"fixture/model","permission":{"*":"ask"}}"#;
+    let user_plugin_contents = "export default async () => ({});\n";
+    fs::write(config.join("opencode.json"), config_contents).unwrap();
+    fs::write(plugins.join("user-plugin.js"), user_plugin_contents).unwrap();
+    let runner = dir.path.join("provider-opencode-runner.mjs");
+    let host = dir.path.join("provider-opencode-plugin-host.mjs");
+    fs::write(
+        &runner,
+        include_str!("../../../crates/session-runtime/tests/fixtures/provider-opencode-runner.mjs"),
+    )
+    .unwrap();
+    fs::write(
+        &host,
+        include_str!(
+            "../../../crates/session-runtime/tests/fixtures/provider-opencode-plugin-host.mjs"
+        ),
+    )
+    .unwrap();
+    let opencode = bin.join("opencode");
+    fs::write(
+        &opencode,
+        "#!/bin/sh\nexec node \"$FIXTURE_OPENCODE_RUNNER\" \"$FIXTURE_OPENCODE_PLUGIN_HOST\" \"$FIXTURE_OPENCODE_ROOT_SESSION\" \"$FIXTURE_OPENCODE_REPORT\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&opencode, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let calls = dir.path.join("opencode-calls");
+    let report = dir.path.join("opencode-report");
+    let root_session = "session:root/opaque";
+    let control_socket = dir.path.join("control.sock");
+    let shell_rc = dir.path.join("opencode-shell.rc");
+    let baseline_shell_roots = shell_integration_roots();
+    fs::write(
+        &shell_rc,
+        format!(
+            "PS1=\nexport PATH='{}':\"$PATH\"\nexport ZMUX_SOCKET_PATH='{}'\nexport OPENCODE_CONFIG_DIR='{}'\nexport FIXTURE_OPENCODE_RUNNER='{}'\nexport FIXTURE_OPENCODE_PLUGIN_HOST='{}'\nexport FIXTURE_OPENCODE_ROOT_SESSION='{}'\nexport FIXTURE_OPENCODE_REPORT='{}'\nexport FIXTURE_OPENCODE_CALLS='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG_CONTENT='{}'\nexport FIXTURE_OPENCODE_USER_PLUGIN_CONTENT='{}'\nexport FIXTURE_OPENCODE_STANDALONE_SUPPORT=1\nprintf 'LOCAL_OPENCODE_SHELL_READY\\n'\n",
+            bin.display(),
+            control_socket.display(),
+            config.display(),
+            runner.display(),
+            host.display(),
+            root_session,
+            report.display(),
+            calls.display(),
+            config.display(),
+            config_contents,
+            user_plugin_contents,
+        ),
+    )
+    .unwrap();
+
+    let contents_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    let _bundled_cli = BundledCli::new(&contents_dir);
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                shell_rc.to_string_lossy().into_owned(),
+                "-i".into(),
+            ],
+            cwd: Some(dir.path.clone()),
+        })
+        .unwrap(),
+    );
+    let server = ControlServer::start(&control_socket, Arc::clone(&desktop)).unwrap();
+    let mut running = RunningDesktop {
+        desktop,
+        server: Some(server),
+    };
+
+    let startup_deadline = Instant::now() + Duration::from_secs(10);
+    let terminal_session = loop {
+        let snapshot = running.desktop.snapshot().unwrap();
+        let session = snapshot
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| pane.surfaces.iter())
+            .find_map(|surface| surface.session_id);
+        if let Some(session) = session {
+            let ready = snapshot.control_frames.iter().any(|frame| {
+                frame.session_id == session
+                    && frame.snapshot.as_ref().is_some_and(|terminal| {
+                        terminal.state == zmux_session_runtime::State::Running
+                            && terminal
+                                .viewport
+                                .contents
+                                .contains("LOCAL_OPENCODE_SHELL_READY")
+                    })
+            });
+            let shell_ready = shell_integration_roots()
+                .difference(&baseline_shell_roots)
+                .any(|path| path.join("provider-launch.py").is_file());
+            if ready && shell_ready {
+                break session;
+            }
+        }
+        assert!(
+            Instant::now() < startup_deadline,
+            "real Desktop OpenCode terminal did not reach interactive startup"
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 72,
+            payload: DesktopCommand::Input {
+                session_id: terminal_session,
+                text: format!("opencode --session {root_session}\n"),
+            },
+        })
+        .unwrap();
+    let launch_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        if terminal.contains(r#"{"ready":true}"#) {
+            break;
+        }
+        assert!(
+            Instant::now() < launch_deadline,
+            "automatic OpenCode launch did not reach its plugin host: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let launch_report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(
+        launch_report["args"],
+        json!(["--standalone", "--session", root_session])
+    );
+    assert_eq!(launch_report["config_directory_is_invocation"], true);
+    assert_eq!(launch_report["config_is_symlink"], true);
+    assert_eq!(launch_report["config_preserved"], true);
+    assert_eq!(launch_report["user_plugin_is_symlink"], true);
+    assert_eq!(launch_report["user_plugin_preserved"], true);
+    assert_eq!(launch_report["zmux_plugin_count"], 1);
+    assert_eq!(launch_report["zmux_plugin_mode"], 0o600);
+    assert_eq!(
+        fs::read(config.join("opencode.json")).unwrap(),
+        config_contents.as_bytes()
+    );
+    assert_eq!(
+        fs::read(plugins.join("user-plugin.js")).unwrap(),
+        user_plugin_contents.as_bytes()
+    );
+
+    let send = |request_id, operation: &str| {
+        running
+            .desktop
+            .submit(Request {
+                version: 1,
+                request_id,
+                payload: DesktopCommand::Input {
+                    session_id: terminal_session,
+                    text: format!("{{\"op\":\"{operation}\"}}\n"),
+                },
+            })
+            .unwrap();
+    };
+
+    send(73, "created");
+    let initial = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Idle,
+        "OpenCode root session did not publish its baseline",
+    );
+    assert_eq!(initial.connection, Connection::Connected);
+    assert_eq!(initial.session_id, terminal_session);
+    assert_eq!(initial.prompt_id, None);
+    send(74, "foreign");
+    thread::sleep(Duration::from_millis(100));
+    let after_foreign = running.desktop.snapshot().unwrap();
+    let local_agents = after_foreign
+        .agent_lifecycle
+        .iter()
+        .filter(|agent| agent.provider == Provider::OpenCodeLocal)
+        .collect::<Vec<_>>();
+    assert_eq!(local_agents.len(), 1);
+    assert_eq!(
+        local_agents[0].provider_session_id,
+        initial.provider_session_id
+    );
+    assert_eq!(local_agents[0].activity, Activity::Idle);
+    assert!(after_foreign.agent_alert_events.is_empty());
+
+    send(75, "start");
+    let working = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Working,
+        "OpenCode prompt callback did not become Working",
+    );
+    assert_eq!(working.provider_session_id, initial.provider_session_id);
+    assert!(working.prompt_id.is_some());
+    send(76, "wait");
+    let waiting = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Waiting,
+        "OpenCode permission callback did not become Waiting",
+    );
+    assert_eq!(waiting.prompt_id, working.prompt_id);
+    assert_eq!(
+        local_provider_alert_count(
+            &running.desktop,
+            Provider::OpenCodeLocal,
+            AlertKind::NeedsUser
+        ),
+        1
+    );
+    send(77, "resume");
+    wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Working,
+        "OpenCode permission reply did not resume the exact root turn",
+    );
+    send(78, "idle");
+    wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Idle,
+        "OpenCode idle snapshot did not refresh the root activity",
+    );
+    assert_eq!(
+        local_provider_alert_count(
+            &running.desktop,
+            Provider::OpenCodeLocal,
+            AlertKind::Completed
+        ),
+        0
+    );
+    send(79, "background");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        local_provider_alert_count(
+            &running.desktop,
+            Provider::OpenCodeLocal,
+            AlertKind::Completed
+        ),
+        0
+    );
+    send(80, "complete");
+    let completion_deadline = Instant::now() + Duration::from_secs(8);
+    while local_provider_alert_count(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        AlertKind::Completed,
+    ) != 1
+    {
+        assert!(
+            Instant::now() < completion_deadline,
+            "OpenCode success evidence did not complete its exact live root turn"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let completed = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Idle,
+        "OpenCode completion did not leave the root session idle",
+    );
+    assert_eq!(completed.prompt_id, working.prompt_id);
+    send(81, "next-start");
+    let next_working = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Working,
+        "second OpenCode root turn did not start",
+    );
+    assert_ne!(next_working.prompt_id, working.prompt_id);
+    send(82, "interrupt");
+    wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.activity == Activity::Idle,
+        "OpenCode interruption did not return to idle",
+    );
+    assert_eq!(
+        local_provider_alert_count(
+            &running.desktop,
+            Provider::OpenCodeLocal,
+            AlertKind::Completed
+        ),
+        1
+    );
+
+    send(83, "shutdown");
+    let disconnected = wait_local_provider(
+        &running.desktop,
+        Provider::OpenCodeLocal,
+        |agent| agent.connection == Connection::Disconnected,
+        "OpenCode process exit did not end its exact provider session",
+    );
+    assert_eq!(disconnected.activity, Activity::Unknown);
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 84,
+            payload: DesktopCommand::Input {
+                session_id: terminal_session,
+                text: format!(
+                    "export FIXTURE_OPENCODE_STANDALONE_SUPPORT=0\nopencode --session {root_session}\n"
+                ),
+            },
+        })
+        .unwrap();
+    let fallback_deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        if terminal.contains("OPENCODE_FALLBACK_LAUNCHED") {
+            break;
+        }
+        assert!(
+            Instant::now() < fallback_deadline,
+            "unsupported standalone mode did not fall back to one original OpenCode launch: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let calls = fs::read_to_string(&calls).unwrap();
+    let calls = calls
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls.len(),
+        2,
+        "help probes do not count as provider launches"
+    );
+    assert_eq!(calls[1]["args"], json!(["--session", root_session]));
+    assert_eq!(calls[1]["config_directory_is_invocation"], false);
+    assert_eq!(calls[1]["config_preserved"], true);
+    assert_eq!(calls[1]["user_plugin_is_symlink"], false);
+    assert_eq!(calls[1]["user_plugin_preserved"], true);
+    assert_eq!(calls[1]["zmux_plugin_count"], 0);
+    assert_eq!(
+        running
+            .desktop
+            .snapshot()
+            .unwrap()
+            .agent_lifecycle
+            .iter()
+            .filter(|agent| agent.provider == Provider::OpenCodeLocal)
+            .count(),
+        1,
+        "untracked fallback must not fabricate another lifecycle session"
+    );
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 77,
+            payload: DesktopCommand::Input {
+                session_id: terminal_session,
+                text: "opencode --help\n".into(),
+            },
+        })
+        .unwrap();
+    let help_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        if terminal.contains("FLAGS") {
+            break;
+        }
+        assert!(
+            Instant::now() < help_deadline,
+            "OpenCode help was altered by automatic lifecycle setup: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    running.shutdown();
+}
+
+#[test]
+fn provider_command_exposes_only_session_scoped_codex_and_opencode_tracking() {
     let dir = Directory::new();
     let output = dir
         .command(&["hooks", "codex", "install", "--directory", "/tmp/nope"])
@@ -1519,7 +2502,14 @@ fn codex_lifecycle_install_is_explicitly_rejected() {
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("Codex provider lifecycle hooks are unsupported")
+            .contains("hooks supports claude and the session-scoped provider auto adapters")
+    );
+
+    let usage = dir.command(&["hooks", "provider"]).output().unwrap();
+    assert!(!usage.status.success());
+    assert!(
+        String::from_utf8_lossy(&usage.stderr)
+            .contains("hooks provider requires auto codex|opencode")
     );
     assert!(!dir.path.join("provider-called").exists());
 }

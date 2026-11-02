@@ -1,4 +1,9 @@
 use std::{
+    fs,
+    io::{BufRead, BufReader, Write},
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -48,6 +53,164 @@ fn write_result(receipt: &mut InputReceipt) -> InputWriteResult {
         assert!(Instant::now() < deadline, "PTY write did not complete");
         thread::sleep(Duration::from_millis(2));
     }
+}
+
+#[test]
+fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events() {
+    assert!(
+        Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success()),
+        "managed provider lifecycle producer tests require Python 3"
+    );
+
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let generation = uuid::Uuid::new_v4();
+    let next_generation = uuid::Uuid::new_v4();
+    let root = PathBuf::from(format!("/tmp/zmux-shell-{nonce}"));
+    fs::create_dir(&root).expect("create private managed shell root");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+        .expect("secure managed shell root");
+    let fifo = root.join("agent-events");
+    let loss_fifo = root.join("agent-events-loss");
+    for path in [&fifo, &loss_fifo] {
+        assert!(
+            Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .is_ok_and(|status| status.success()),
+            "create managed lifecycle FIFO"
+        );
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("secure managed lifecycle FIFO");
+    }
+
+    let mut stream = Command::new("python3")
+        .arg("-c")
+        .arg(include_str!("../src/shell/claude-lifecycle-stream.py"))
+        .arg(&nonce)
+        .env("ZMUX_SHELL_INTEGRATION_DIRECTORY", &root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the shipped managed lifecycle stream producer");
+    let mut output = BufReader::new(stream.stdout.take().unwrap());
+    let mut input = stream.stdin.take().unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).expect("read lifecycle hello");
+    let hello: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(hello["kind"], "hello");
+    assert_eq!(hello["nonce"], nonce);
+
+    serde_json::to_writer(
+        &mut input,
+        &serde_json::json!({
+            "kind":"activate",
+            "version":3,
+            "nonce":nonce,
+            "generation":generation,
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read lifecycle active frame");
+    let active: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(active["kind"], "active");
+    assert_eq!(active["generation"], generation.to_string());
+    let marker = root.join("agent-lifecycle-generation");
+    let metadata = fs::symlink_metadata(&marker).expect("active generation marker");
+    assert!(metadata.is_file());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap().trim(),
+        generation.to_string()
+    );
+
+    let mut writer = fs::OpenOptions::new()
+        .write(true)
+        .open(&fifo)
+        .expect("open provider event FIFO after stream activation");
+    let stale = serde_json::json!({
+        "nonce":nonce,
+        "generation":uuid::Uuid::new_v4(),
+        "provider_observation": {
+            "provider":"codex","scope":"subagent","session_id":"foreign/thread",
+            "turn_id":"foreign/turn","state":"waiting","transition":"state_changed","marker":"live"
+        }
+    });
+    serde_json::to_writer(&mut writer, &stale).unwrap();
+    writer.write_all(b"\n").unwrap();
+
+    let current = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_observation": {
+            "provider":"codex","scope":"root","session_id":"thread:opaque/root",
+            "turn_id":"turn/opaque:8","state":"working","transition":"state_changed","marker":"live"
+        }
+    });
+    serde_json::to_writer(&mut writer, &current).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read provider lifecycle frame");
+    let provider: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(provider["kind"], "provider_state");
+    assert_eq!(provider["version"], 3);
+    assert_eq!(provider["nonce"], nonce);
+    assert_eq!(provider["generation"], generation.to_string());
+    assert_eq!(provider["sequence"], 1);
+    assert_eq!(provider["observation"]["session_id"], "thread:opaque/root");
+    assert_eq!(provider["observation"]["turn_id"], "turn/opaque:8");
+    assert_eq!(provider["observation"].as_object().unwrap().len(), 7);
+    assert!(!line.contains("foreign"));
+    assert!(!line.contains("prompt"));
+
+    // Replace the marker while the old stream is still active. Its cleanup
+    // must leave the newer attachment's marker untouched.
+    fs::write(&marker, format!("{next_generation}\n")).unwrap();
+    fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
+    let malformed_current = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_observation": {
+            "provider":"codex","scope":"root","session_id":"thread:opaque/root",
+            "turn_id":"turn/opaque:8","state":"working","transition":"state_changed",
+            "marker":"live","prompt":"private prompt must not be forwarded"
+        }
+    });
+    serde_json::to_writer(&mut writer, &malformed_current).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read provider evidence gap");
+    let gap: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(gap["kind"], "gap");
+    assert_eq!(gap["sequence"], 2);
+    assert!(!line.contains("private prompt"));
+
+    drop(writer);
+    drop(input);
+    let status = stream.wait().expect("reap managed lifecycle stream");
+    assert_eq!(status.code(), Some(73));
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap().trim(),
+        next_generation.to_string()
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

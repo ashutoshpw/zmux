@@ -102,7 +102,15 @@ fn main() {
         .first()
         .is_some_and(|argument| argument == "--version")
     {
-        println!("2.1.301 (Claude Code)");
+        println!("2.1.316 (Claude Code)");
+        return;
+    }
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "--help")
+    {
+        println!("  --plugin-dir <path> Load a plugin for this session only (repeatable:");
+        println!("    --plugin-dir A --plugin-dir B)");
         return;
     }
 

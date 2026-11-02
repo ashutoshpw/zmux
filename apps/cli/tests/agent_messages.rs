@@ -529,6 +529,7 @@ static void barrier(const char *stage){
 }
 int main(int argc,char **argv){
     if(argc==2&&!strcmp(argv[1],"--version")){puts("2.1.301 (Claude Code)");return 0;}
+    if(argc==2&&!strcmp(argv[1],"--help")){puts("  --plugin-dir <path>  Load a plugin directory (repeatable)");return 0;}
     alarm(15);
     const char *session=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"--session-id"))session=argv[i+1];
     if(!session||getenv("ZMUX_SOCKET_PASSWORD")||getenv("ZMUX_SURFACE_ID"))return 25;

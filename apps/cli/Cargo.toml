@@ -19,6 +19,7 @@ nix = { workspace = true, features = ["poll", "fs"] }
 signal-hook.workspace = true
 zmux-remote-runtime.workspace = true
 uuid.workspace = true
+tungstenite = { version = "=0.20.1", default-features = false, features = ["handshake"] }
 
 time = { version = "=0.3.44", features = ["parsing", "formatting"] }
 

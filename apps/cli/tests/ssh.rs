@@ -1,6 +1,7 @@
 //! Real loopback OpenSSH journey; requires sshd and ssh-keygen, never an external host.
 #[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
 mod desktop_snapshot;
+use desktop_runtime::agent_lifecycle::{Activity, AlertKind, Connection, Provider};
 use serde_json::Value;
 use std::{
     fs,
@@ -196,6 +197,537 @@ fn upload(socket: &Path, id: u64, predicate: impl Fn(&Value) -> bool) -> Value {
         );
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn wait_remote_provider(
+    desktop: &Desktop,
+    activity: Activity,
+) -> desktop_runtime::agent_lifecycle::Agent {
+    wait_remote_provider_kind(desktop, Provider::CodexRemote, activity)
+}
+
+fn wait_remote_provider_kind(
+    desktop: &Desktop,
+    provider: Provider,
+    activity: Activity,
+) -> desktop_runtime::agent_lifecycle::Agent {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let snapshot = desktop_snapshot::read_until(desktop, deadline);
+        if let Some(agent) = snapshot
+            .agent_lifecycle
+            .iter()
+            .find(|agent| agent.provider == provider && agent.activity == activity)
+        {
+            return agent.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "managed SSH {provider:?} lifecycle did not reach {activity:?}; snapshot={:?}",
+            snapshot.agent_lifecycle
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn require_python3_for_managed_provider_tests() {
+    let version = Command::new("python3")
+        .arg("--version")
+        .output()
+        .expect("managed SSH provider tests require Python 3 on the test host and SSH account");
+    assert!(
+        version.status.success(),
+        "managed SSH provider tests require Python 3; python3 --version failed"
+    );
+}
+
+fn require_node_for_managed_opencode_test() {
+    let version = Command::new("node")
+        .arg("--version")
+        .output()
+        .expect("managed SSH OpenCode fixture requires Node.js (node)");
+    assert!(
+        version.status.success(),
+        "managed SSH OpenCode fixture requires Node.js; node --version failed"
+    );
+}
+
+fn codex_completion_count(desktop: &Desktop) -> usize {
+    desktop_snapshot::read(desktop)
+        .agent_alert_events
+        .iter()
+        .filter(|event| {
+            event.provider == Provider::CodexRemote && event.kind == AlertKind::Completed
+        })
+        .count()
+}
+
+#[test]
+fn managed_ssh_codex_uses_root_thread_events_and_ignores_stop_hook_decisions() {
+    require_python3_for_managed_provider_tests();
+    let mut fixture = Fixture::start();
+    let socket = fixture.root.join("control.sock");
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/sh".into(),
+            args: vec!["-i".into()],
+            cwd: None,
+        })
+        .unwrap(),
+    );
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+
+    let bin = fixture.root.join("provider-bin");
+    fs::create_dir(&bin).unwrap();
+    let codex = bin.join("codex");
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-synthetic-codex.py"),
+        &codex,
+    )
+    .unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let state = fixture.root.join("provider-state");
+    let report = fixture.root.join("provider-config-report");
+    let calls = fixture.root.join("provider-launch-count");
+    let stop_probe = fixture.root.join("provider-stop-probe");
+    let stop_result = fixture.root.join("provider-stop-result");
+    let release = fixture.root.join("provider-release");
+    let app_server_socket = fixture.root.join("codex-app-server.sock");
+    let app_server_pid = fixture.root.join("codex-app-server.pid");
+    fs::write(&state, "idle").unwrap();
+
+    let config = fixture.root.join("client").to_string_lossy().into_owned();
+    let key = fixture
+        .root
+        .join("client key")
+        .to_string_lossy()
+        .into_owned();
+    let created = json(
+        &socket,
+        &[
+            "ssh",
+            "fixture",
+            "--ssh-config",
+            &config,
+            "--identity",
+            &key,
+            "--name",
+            "Provider fixture",
+            "--no-focus",
+        ],
+    );
+    let surface = created["created_workspaces"][0]["surface_uuid"]
+        .as_str()
+        .unwrap();
+    screen(&socket, surface, |snapshot| snapshot["state"] == "running");
+    let command = format!(
+        "export PATH='{}':$PATH; export ZMUX_FAKE_CODEX_STATE='{}'; export ZMUX_FAKE_CODEX_REPORT='{}'; export ZMUX_FAKE_CODEX_CALLS='{}'; export ZMUX_FAKE_CODEX_STOP_PROBE='{}'; export ZMUX_FAKE_CODEX_STOP_RESULT='{}'; export ZMUX_FAKE_CODEX_RELEASE='{}'; export ZMUX_FAKE_CODEX_SOCKET='{}'; export ZMUX_FAKE_CODEX_DAEMON_PID='{}'; codex\n",
+        bin.display(),
+        state.display(),
+        report.display(),
+        calls.display(),
+        stop_probe.display(),
+        stop_result.display(),
+        release.display(),
+        app_server_socket.display(),
+        app_server_pid.display(),
+    );
+    json(&socket, &["send-text", "--surface", surface, &command]);
+    screen(&socket, surface, |snapshot| {
+        snapshot["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains("CODEX_FIXTURE_READY"))
+    });
+
+    let initial = wait_remote_provider(&desktop, Activity::Idle);
+    assert_eq!(initial.connection, Connection::Connected);
+    assert_eq!(initial.prompt_id, None);
+    let config_report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(config_report["existing_session_start_preserved"], true);
+    assert_eq!(config_report["zmux_session_start_added"], true);
+    assert_eq!(config_report["stop_override_added"], false);
+    assert_eq!(codex_completion_count(&desktop), 0);
+
+    fs::write(&state, "start").unwrap();
+    let working = wait_remote_provider(&desktop, Activity::Working);
+    assert_eq!(working.connection, Connection::Connected);
+    assert_eq!(working.provider_session_id, initial.provider_session_id);
+    assert!(working.prompt_id.is_some());
+
+    // A Stop-hook result carrying both block and approve fields is rejected by
+    // the SessionStart-only ingress; it cannot change this exact live turn.
+    fs::write(&stop_probe, "invoke Stop hook").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !stop_result.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "synthetic Codex Stop hook was not exercised"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_ne!(fs::read_to_string(&stop_result).unwrap(), "0");
+    thread::sleep(Duration::from_millis(100));
+    let still_working = wait_remote_provider(&desktop, Activity::Working);
+    assert_eq!(still_working.prompt_id, working.prompt_id);
+    assert_eq!(codex_completion_count(&desktop), 0);
+
+    fs::write(&state, "complete").unwrap();
+    let completed = wait_remote_provider(&desktop, Activity::Idle);
+    assert_eq!(completed.connection, Connection::Connected);
+    assert_eq!(completed.provider_session_id, initial.provider_session_id);
+    assert_eq!(codex_completion_count(&desktop), 1);
+
+    fs::write(&release, "release").unwrap();
+    screen(&socket, surface, |snapshot| {
+        snapshot["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains("CODEX_FIXTURE_DONE"))
+    });
+    let lost = wait_remote_provider(&desktop, Activity::Unknown);
+    assert_eq!(lost.connection, Connection::Unknown);
+    assert_eq!(codex_completion_count(&desktop), 1);
+    for (index, args) in [
+        vec!["--cd", "project-B"],
+        vec!["--profile=selected-profile"],
+        vec!["-C", "project-B"],
+        vec!["-p", "selected-profile"],
+        vec!["mcp", "list"],
+    ]
+    .iter()
+    .enumerate()
+    {
+        let marker = format!("REMOTE_CODEX_CONTEXT_{index}_DONE");
+        let command = format!(
+            "codex {}; printf 'REMOTE_CODEX_CONTEXT_%s_DONE\\n' '{index}'\n",
+            args.join(" ")
+        );
+        json(&socket, &["send-text", "--surface", surface, &command]);
+        screen(&socket, surface, |snapshot| {
+            snapshot["contents"]
+                .as_str()
+                .is_some_and(|s| s.contains(&marker))
+        });
+        let report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+        assert_eq!(report["args"], serde_json::json!(args));
+        assert_eq!(report["zmux_session_start_added"], false);
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap().lines().count(),
+            index + 2,
+            "each remote passthrough invocation must launch exactly once"
+        );
+    }
+
+    json(&socket, &["close-surface", surface]);
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    fixture.stop();
+}
+
+#[test]
+fn managed_ssh_opencode_tracks_root_events_refreshes_long_turns_and_preserves_config() {
+    require_python3_for_managed_provider_tests();
+    require_node_for_managed_opencode_test();
+    let mut fixture = Fixture::start();
+    let socket = fixture.root.join("control.sock");
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/sh".into(),
+            args: vec!["-i".into()],
+            cwd: None,
+        })
+        .unwrap(),
+    );
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+
+    let bin = fixture.root.join("provider-bin");
+    fs::create_dir(&bin).unwrap();
+    let opencode = bin.join("opencode");
+    fs::write(
+        &opencode,
+        "#!/bin/sh\nexec node \"$FIXTURE_OPENCODE_RUNNER\" \"$FIXTURE_OPENCODE_PLUGIN_HOST\" \"$FIXTURE_OPENCODE_ROOT_SESSION\" \"$FIXTURE_OPENCODE_REPORT\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&opencode, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let config = fixture.root.join("user-opencode-config");
+    let plugins = config.join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&plugins, fs::Permissions::from_mode(0o700)).unwrap();
+    let config_contents = r#"{"model":"fixture/model","permission":{"*":"ask"}}"#;
+    let user_plugin_contents = "export default async () => ({});\n";
+    fs::write(config.join("opencode.json"), config_contents).unwrap();
+    fs::write(plugins.join("user-plugin.js"), user_plugin_contents).unwrap();
+    let runner = fixture.root.join("provider-opencode-runner.mjs");
+    let host = fixture.root.join("provider-opencode-plugin-host.mjs");
+    fs::write(
+        &runner,
+        include_str!("../../../crates/session-runtime/tests/fixtures/provider-opencode-runner.mjs"),
+    )
+    .unwrap();
+    fs::write(
+        &host,
+        include_str!(
+            "../../../crates/session-runtime/tests/fixtures/provider-opencode-plugin-host.mjs"
+        ),
+    )
+    .unwrap();
+
+    let report = fixture.root.join("opencode-report");
+    let calls = fixture.root.join("opencode-calls");
+    let root_session = "session:remote/root-opaque";
+    let config_path = fixture.root.join("client").to_string_lossy().into_owned();
+    let key = fixture
+        .root
+        .join("client key")
+        .to_string_lossy()
+        .into_owned();
+    let created = json(
+        &socket,
+        &[
+            "ssh",
+            "fixture",
+            "--ssh-config",
+            &config_path,
+            "--identity",
+            &key,
+            "--name",
+            "OpenCode fixture",
+            "--no-focus",
+        ],
+    );
+    let surface = created["created_workspaces"][0]["surface_uuid"]
+        .as_str()
+        .unwrap();
+    screen(&socket, surface, |snapshot| snapshot["state"] == "running");
+
+    let command = format!(
+        "export PATH='{}':$PATH; export OPENCODE_CONFIG_DIR='{}'; export FIXTURE_OPENCODE_RUNNER='{}'; export FIXTURE_OPENCODE_PLUGIN_HOST='{}'; export FIXTURE_OPENCODE_ROOT_SESSION='{}'; export FIXTURE_OPENCODE_REPORT='{}'; export FIXTURE_OPENCODE_CALLS='{}'; export FIXTURE_OPENCODE_USER_CONFIG='{}'; export FIXTURE_OPENCODE_USER_CONFIG_CONTENT='{}'; export FIXTURE_OPENCODE_USER_PLUGIN_CONTENT='{}'; export FIXTURE_OPENCODE_STANDALONE_SUPPORT=1; opencode --session {}\n",
+        bin.display(),
+        config.display(),
+        runner.display(),
+        host.display(),
+        root_session,
+        report.display(),
+        calls.display(),
+        config.display(),
+        config_contents,
+        user_plugin_contents,
+        root_session,
+    );
+    json(&socket, &["send-text", "--surface", surface, &command]);
+    screen(&socket, surface, |snapshot| {
+        snapshot["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains(r#"{"ready":true}"#))
+    });
+
+    let send = |operation: &str| {
+        json(
+            &socket,
+            &[
+                "send-text",
+                "--surface",
+                surface,
+                &format!("{{\"op\":\"{operation}\"}}\n"),
+            ],
+        );
+    };
+    send("created");
+
+    let initial_deadline = Instant::now() + Duration::from_secs(12);
+    let initial = loop {
+        let snapshot = desktop_snapshot::read_until(&desktop, initial_deadline);
+        if let Some(agent) = snapshot.agent_lifecycle.iter().find(|agent| {
+            agent.provider == Provider::OpenCodeRemote && agent.activity == Activity::Idle
+        }) {
+            break agent.clone();
+        }
+        if Instant::now() >= initial_deadline {
+            let terminal = json(&socket, &["read-screen", "--surface", surface]);
+            panic!(
+                "managed SSH OpenCode did not publish its root baseline; lifecycle={:?}; terminal={:?}",
+                snapshot.agent_lifecycle, terminal["contents"]
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(initial.connection, Connection::Connected);
+    assert_eq!(initial.surface_uuid.to_string(), surface);
+    assert_eq!(initial.prompt_id, None);
+    let launch_report: Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(
+        launch_report["args"],
+        serde_json::json!(["--standalone", "--session", root_session])
+    );
+    assert_eq!(launch_report["config_directory_is_invocation"], true);
+    assert_eq!(launch_report["config_is_symlink"], true);
+    assert_eq!(launch_report["config_preserved"], true);
+    assert_eq!(launch_report["user_plugin_is_symlink"], true);
+    assert_eq!(launch_report["user_plugin_preserved"], true);
+    assert_eq!(launch_report["zmux_plugin_count"], 1);
+    assert_eq!(launch_report["zmux_plugin_mode"], 0o600);
+    assert_eq!(
+        fs::read(config.join("opencode.json")).unwrap(),
+        config_contents.as_bytes()
+    );
+    assert_eq!(
+        fs::read(plugins.join("user-plugin.js")).unwrap(),
+        user_plugin_contents.as_bytes()
+    );
+
+    let root_agent = wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Idle);
+    assert_eq!(root_agent.provider_session_id, initial.provider_session_id);
+    send("foreign");
+    thread::sleep(Duration::from_millis(100));
+    let after_foreign = desktop_snapshot::read(&desktop);
+    let remote_agents = after_foreign
+        .agent_lifecycle
+        .iter()
+        .filter(|agent| agent.provider == Provider::OpenCodeRemote)
+        .collect::<Vec<_>>();
+    assert_eq!(remote_agents.len(), 1);
+    assert_eq!(remote_agents[0].activity, Activity::Idle);
+    assert!(after_foreign.agent_alert_events.is_empty());
+
+    send("start");
+    let working = wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Working);
+    assert_eq!(working.provider_session_id, initial.provider_session_id);
+    assert!(working.prompt_id.is_some());
+    let long_run_started = Instant::now();
+    while long_run_started.elapsed() < Duration::from_secs(31) {
+        let snapshot = desktop_snapshot::read(&desktop);
+        let agent = snapshot
+            .agent_lifecycle
+            .iter()
+            .find(|agent| agent.provider == Provider::OpenCodeRemote)
+            .expect("OpenCode root agent remains attached during its long turn");
+        assert_eq!(agent.activity, Activity::Working);
+        assert_eq!(agent.connection, Connection::Connected);
+        assert!(snapshot.agent_alert_events.is_empty());
+        thread::sleep(Duration::from_millis(250));
+    }
+    let refreshed =
+        wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Working);
+    assert_eq!(refreshed.prompt_id, working.prompt_id);
+    assert_eq!(refreshed.connection, Connection::Connected);
+
+    send("wait");
+    let waiting = wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Waiting);
+    assert_eq!(waiting.prompt_id, working.prompt_id);
+    assert_eq!(
+        desktop_snapshot::read(&desktop)
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::OpenCodeRemote && event.kind == AlertKind::NeedsUser
+            })
+            .count(),
+        1
+    );
+    send("resume");
+    wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Working);
+    send("idle");
+    wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Idle);
+    assert_eq!(
+        desktop_snapshot::read(&desktop)
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::OpenCodeRemote && event.kind == AlertKind::Completed
+            })
+            .count(),
+        0,
+        "an idle source snapshot is not completion evidence"
+    );
+    send("background");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        desktop_snapshot::read(&desktop)
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::OpenCodeRemote && event.kind == AlertKind::Completed
+            })
+            .count(),
+        0
+    );
+    send("complete");
+    let completion_deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = desktop_snapshot::read(&desktop);
+        let completions = snapshot
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::OpenCodeRemote && event.kind == AlertKind::Completed
+            })
+            .count();
+        if completions == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < completion_deadline,
+            "OpenCode completion was not accepted once: {:?}",
+            snapshot.agent_alert_events
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let completed = wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Idle);
+    assert_eq!(completed.prompt_id, working.prompt_id);
+    send("next-start");
+    let second_turn =
+        wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Working);
+    assert_ne!(second_turn.prompt_id, working.prompt_id);
+    send("interrupt");
+    wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Idle);
+    assert_eq!(
+        desktop_snapshot::read(&desktop)
+            .agent_alert_events
+            .iter()
+            .filter(|event| {
+                event.provider == Provider::OpenCodeRemote && event.kind == AlertKind::Completed
+            })
+            .count(),
+        1,
+        "an interrupted OpenCode turn is never completion"
+    );
+
+    send("shutdown");
+    let lost = wait_remote_provider_kind(&desktop, Provider::OpenCodeRemote, Activity::Unknown);
+    assert_eq!(lost.connection, Connection::Unknown);
+
+    let fallback = format!(
+        "export FIXTURE_OPENCODE_STANDALONE_SUPPORT=0; opencode --session {}\n",
+        root_session
+    );
+    json(&socket, &["send-text", "--surface", surface, &fallback]);
+    screen(&socket, surface, |snapshot| {
+        snapshot["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains("OPENCODE_FALLBACK_LAUNCHED"))
+    });
+    let calls = fs::read_to_string(&calls)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2, "metadata probes do not launch the provider");
+    assert_eq!(
+        calls[1]["args"],
+        serde_json::json!(["--session", root_session])
+    );
+    assert_eq!(calls[1]["config_directory_is_invocation"], false);
+    assert_eq!(calls[1]["config_preserved"], true);
+    assert_eq!(calls[1]["user_plugin_is_symlink"], false);
+    assert_eq!(calls[1]["user_plugin_preserved"], true);
+    assert_eq!(calls[1]["zmux_plugin_count"], 0);
+
+    json(&socket, &["close-surface", surface]);
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    fixture.stop();
 }
 
 #[test]

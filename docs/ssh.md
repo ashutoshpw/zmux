@@ -40,6 +40,17 @@ The launcher passes the SSH program and connection options directly as argv.
 OpenSSH still owns configured ProxyCommand, Match exec and LocalCommand behavior.
 This launch requires full local-control access and remains denied to remote relay origins.
 
+Interactive `codex` and `opencode` commands also have session-scoped lifecycle
+adapters. Codex tracking requires reviewing Zmux's additive `SessionStart` hook
+in Codex `/hooks` and attaching to Codex's already-running shared app-server;
+Zmux does not decide permissions or infer completion from `Stop`. OpenCode
+tracking requires the installed CLI to advertise `--standalone` and loads one
+invocation-scoped plugin while preserving the existing config directory and
+plugins. Managed provider tracking requires Python 3 on the SSH account. Missing
+provider evidence, an unreviewed hook, unsupported CLI mode, or stream loss keeps
+the sidebar state Unknown. See [provider lifecycle tracking](provider-lifecycle.md)
+for setup, state, and fallback behavior.
+
 `--no-focus` (or `--focus false`) preserves the existing workspace selection. The JSON
 result includes `created_workspaces` with exact workspace/pane/surface IDs and UUIDs,
 even when focus remains elsewhere. Launch and authentication are asynchronous; query

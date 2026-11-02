@@ -42,3 +42,7 @@ function __zmux_refresh_openers_before_prompt --on-event fish_prompt
     __zmux_refresh_openers
 end
 __zmux_refresh_openers
+
+if test -r "$ZMUX_SHELL_INTEGRATION_DIRECTORY/provider.fish"
+    source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/provider.fish"
+end

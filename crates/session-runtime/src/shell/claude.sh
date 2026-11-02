@@ -52,3 +52,7 @@ if [ -n "${BASH_VERSION-}" ]; then
     esac
     export PROMPT_COMMAND
 fi
+
+if [ -r "${ZMUX_SHELL_INTEGRATION_DIRECTORY-}/provider.sh" ]; then
+    . "$ZMUX_SHELL_INTEGRATION_DIRECTORY/provider.sh"
+fi

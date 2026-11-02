@@ -5,7 +5,7 @@ use std::{
     collections::HashSet,
     ffi::OsStr,
     fs,
-    io::Write,
+    io::{Read, Write},
     os::{
         fd::AsRawFd,
         unix::{
@@ -26,6 +26,7 @@ use zmux_desktop_runtime::agent_messages::{MessageAction, MessageRequest, Provid
 use zmux_session_runtime::child::{ProcessIdentity, process_identity};
 use zmux_workspace_core::{SessionId, SurfaceId};
 mod plugin;
+mod provider;
 const EVENT_BUDGET: Duration = Duration::from_millis(2700);
 const LIFECYCLE_BUDGET: Duration = Duration::from_millis(150);
 const FRAME_LIMIT: usize = 65536;
@@ -66,6 +67,7 @@ pub(super) enum Invocation {
     Event {
         event: String,
     },
+    Provider(provider::Invocation),
 }
 pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     if help_requested(tail) {
@@ -74,14 +76,14 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     let separator = tail.iter().position(|argument| argument == "--");
     let prefix = &tail[..separator.unwrap_or(tail.len())];
     let args = utf8_args(prefix)?;
+    if args.first().map(String::as_str) == Some("provider") {
+        return provider::parse(tail)
+            .map(|invocation| Parsed::Hooks(Invocation::Provider(invocation)));
+    }
     if args.first().map(String::as_str) != Some("claude") {
-        if args.first().map(String::as_str) == Some("codex") {
-            return Err(CliError(
-                "Codex provider lifecycle hooks are unsupported; no Codex hooks were installed"
-                    .into(),
-            ));
-        }
-        return Err(CliError("hooks currently supports claude only".into()));
+        return Err(CliError(
+            "hooks supports claude and the session-scoped provider auto adapters".into(),
+        ));
     }
     if args.get(1).map(String::as_str) == Some("event") {
         return match args.as_slice() {
@@ -273,27 +275,169 @@ fn interactive_args(args: &[OsString]) -> Result<bool, CliError> {
     Ok(plan)
 }
 
-fn supported_provider(path: &Path) -> Result<plugin::Binary, CliError> {
+const PROVIDER_HELP_LIMIT: usize = 65_536;
+
+struct TemporaryProviderHelpOutput {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl Drop for TemporaryProviderHelpOutput {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
+fn temporary_provider_help_output() -> Result<TemporaryProviderHelpOutput, CliError> {
+    let parent = env::temp_dir().canonicalize()?;
+    for _ in 0..8 {
+        let directory = parent.join(format!("zmux-claude-help-{}", Uuid::new_v4().simple()));
+        match fs::DirBuilder::new().mode(0o700).create(&directory) {
+            Ok(()) => {
+                let output = TemporaryProviderHelpOutput {
+                    path: directory.join("help.txt"),
+                    directory,
+                };
+                let file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&output.path)?;
+                drop(file);
+                return Ok(output);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(CliError(
+        "cannot allocate bounded Claude help output storage".into(),
+    ))
+}
+
+fn provider_help(
+    provider: &Path,
+    cancellation: &bounded_command::Cancellation,
+) -> Result<String, CliError> {
+    let output_file = temporary_provider_help_output()?;
+    let command_output = bounded_command::capture(
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "ulimit -f 128 || exit 125; \"$1\" --help >\"$2\" 2>&1",
+                "zmux-claude-help",
+            ])
+            .arg(provider)
+            .arg(&output_file.path),
+        Instant::now() + DEFAULT_TIMEOUT,
+        cancellation,
+    )?;
+    if command_output.status != zmux_session_runtime::child::ExitObservation::Exited(0) {
+        return Err(CliError(
+            "Claude --help preflight did not exit successfully within its bounds".into(),
+        ));
+    }
+
+    let metadata = fs::symlink_metadata(&output_file.path)?;
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.nlink() != 1
+        || metadata.len() > PROVIDER_HELP_LIMIT as u64
+    {
+        return Err(CliError(
+            "Claude --help output exceeded its private capture bounds".into(),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let mut file = fs::File::open(&output_file.path)?;
+    Read::by_ref(&mut file)
+        .take(PROVIDER_HELP_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > PROVIDER_HELP_LIMIT {
+        return Err(CliError(
+            "Claude --help output exceeded its private capture bounds".into(),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| CliError("Claude --help returned invalid UTF-8".into()))
+}
+
+fn repeatable_plugin_dir(help: &str) -> bool {
+    let lines = help.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let option = line.trim_start();
+        let Some(rest) = option.strip_prefix("--plugin-dir") else {
+            continue;
+        };
+        let argument = rest.trim_start();
+        // Help examples can begin with `--plugin-dir A`; only inspect the
+        // option declaration, which includes the argument placeholder.
+        if !argument.starts_with('<') && !argument.starts_with('=') {
+            continue;
+        }
+        let mut section = option.to_ascii_lowercase();
+        for continuation in lines.iter().skip(index + 1) {
+            let continuation = continuation.trim_start();
+            if continuation.starts_with("--") {
+                break;
+            }
+            section.push(' ');
+            section.push_str(continuation);
+        }
+        return section.contains("repeatable") || section.contains("can be used multiple times");
+    }
+    false
+}
+
+fn supported_provider(path: &Path) -> Result<plugin::VerifiedProvider, CliError> {
     if !path.is_absolute() {
         return Err(CliError("provider path must be absolute".into()));
     }
     let expected = plugin::binary(path)?;
     let cancellation = bounded_command::Cancellation::new()?;
-    let output = bounded_command::capture(
+    let version_output = bounded_command::capture(
         Command::new(&expected.path).arg("--version"),
         Instant::now() + DEFAULT_TIMEOUT,
         &cancellation,
     )?;
-    if output.status != zmux_session_runtime::child::ExitObservation::Exited(0)
-        || output.stdout.trim() != format!("{} (Claude Code)", plugin::SUPPORTED_VERSION)
-        || plugin::binary(&expected.path)? != expected
+    let version = version_output
+        .stdout
+        .trim()
+        .strip_suffix(" (Claude Code)")
+        .filter(|version| plugin::supports_provider_version(version))
+        .map(str::to_owned);
+    if version_output.status != zmux_session_runtime::child::ExitObservation::Exited(0)
+        || version.is_none()
     {
         return Err(CliError(format!(
-            "only the unchanged Claude Code {} executable is supported",
-            plugin::SUPPORTED_VERSION
+            "Claude Code version is unsupported; the reviewed patch range is {} through {}",
+            plugin::MIN_SUPPORTED_VERSION,
+            plugin::MAX_SUPPORTED_VERSION
         )));
     }
-    Ok(expected)
+    if !plugin::metadata_matches(&expected) {
+        return Err(CliError(
+            "Claude executable changed during --version preflight".into(),
+        ));
+    }
+
+    let help = provider_help(&expected.path, &cancellation)?;
+    if !repeatable_plugin_dir(&help) {
+        return Err(CliError(format!(
+            "Claude Code {} does not advertise repeatable --plugin-dir support",
+            version.as_deref().expect("validated Claude version")
+        )));
+    }
+    if plugin::binary(&expected.path)? != expected {
+        return Err(CliError(
+            "Claude executable changed during --help preflight".into(),
+        ));
+    }
+    Ok(plugin::VerifiedProvider {
+        binary: expected,
+        version: version.expect("validated Claude version"),
+    })
 }
 
 pub(super) fn run(
@@ -371,6 +515,7 @@ pub(super) fn run(
             println!("{}", cleanup_auto_plugins(&root)?);
             Ok(0)
         }
+        Invocation::Provider(invocation) => provider::run(invocation, socket, timeout, password),
     }
 }
 
