@@ -697,3 +697,19 @@ Remaining limitations and acceptance gaps:
 
 - RUST_TEST_THREADS=2 scripts/check r7 completed with exit 0 after moving synthetic daemon creation into explicit fixture setup. Log: /tmp/zmux-provider-support-check-r7.log. Both local and real managed SSH Codex tests passed; normal status probes remain bounded at two seconds and do not start a daemon.
 - The previous b1e302b development job failed the same preflight deadline as Foundation macOS, before app packaging. This is a fixture-contract correction, not an infrastructure retry or a relaxation of provider state/ownership assertions. Fresh exact-source workflows follow the scoped fix commit.
+
+### Existing-daemon fixture source pushed
+
+- Exact source 5559f09b2c4b3ee12baa345dcd5ffc126ed74b3c pushed after scripts/check r7 passed. Foundation run: https://github.com/ashutoshpw/zmux/actions/runs/41450440329 . Universal development run: https://github.com/ashutoshpw/zmux/actions/runs/41450440458 .
+- Fresh verification task will require both Foundation platforms, native execution, final accepted artifact upload/download and package provenance checks. No previous candidate or helper artifact is accepted as an app build.
+
+### Reassessment after three hosted source failures
+
+- Source 5559f09 reached CODEX_FIXTURE_READY on macOS, but the baseline lifecycle snapshot stayed empty. Both Foundation macOS (41450440329) and development (41450440458) failed that owner-boundary assertion; later poisoned-mutex failures are cascades. Ubuntu and Swift typechecks passed. No app artifact exists.
+- Stopped speculative timing changes and traced the path: hook ingress, exact existing-daemon attach/snapshot and initial Desktop observation admission. The supervisor discarded attach errors and the test timeout omitted terminal diagnostics, so available hosted logs could not identify the failed stage.
+- Attach failure output now includes the existing sanitized local error classification (RPC payload/error bodies remain discarded), and the fixture timeout includes bounded terminal text from at most four synthetic surfaces. No state assertion, generation/ownership guard or production deadline changed. Full scripts/check r8 is running before a diagnostic source push.
+
+### Diagnostic source validation passed
+
+- RUST_TEST_THREADS=2 scripts/check r8 completed with exit 0 (/tmp/zmux-provider-support-check-r8.log). The scoped change exposes sanitized attach errors and bounded synthetic terminal output at the owner-boundary timeout; lifecycle behavior, ownership/generation fences and all deadlines are unchanged.
+- Next hosted run is diagnostic-first: if the macOS baseline remains absent, retrieve the precise surfaced error before selecting a repair. No infrastructure retry or unverified app acceptance is authorized from the previous failures.

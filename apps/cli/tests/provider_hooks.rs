@@ -138,8 +138,20 @@ fn wait_local_codex(
         }
         assert!(
             Instant::now() < deadline,
-            "{context}; provider snapshot={:?}",
-            snapshot.agent_lifecycle
+            "{context}; provider snapshot={:?}; fixture terminals={:?}",
+            snapshot.agent_lifecycle,
+            snapshot
+                .control_frames
+                .iter()
+                .take(4)
+                .filter_map(|frame| frame.snapshot.as_ref())
+                .map(|terminal| terminal
+                    .viewport
+                    .contents
+                    .chars()
+                    .take(4096)
+                    .collect::<String>())
+                .collect::<Vec<_>>()
         );
         thread::sleep(Duration::from_millis(10));
     }

@@ -627,8 +627,10 @@ fn supervise_provider(context: ProviderSupervision<'_>) -> Result<u8, Box<dyn Er
                         executable, options, route, runtime, generation, session_id,
                     ) {
                         Ok(watcher) => codex_watcher = Some(watcher),
-                        Err(_) => eprintln!(
-                            "zmux: Codex thread could not be attached to the existing app-server; activity remains Unknown"
+                        // AppServer and lifecycle admission errors contain
+                        // sanitized local classifications, never RPC payloads.
+                        Err(error) => eprintln!(
+                            "zmux: Codex thread could not be attached to the existing app-server ({error}); activity remains Unknown"
                         ),
                     }
                 }
