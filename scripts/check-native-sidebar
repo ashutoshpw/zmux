@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise compact toolbar and grouping through an isolated packaged native app."""
+"""Exercise native sidebar grouping and provider projection through a packaged app."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -31,14 +31,17 @@ def control_request(path, request_id, command):
                          separators=(",", ":")).encode()
     if len(encoded) > 16_384:
         raise RuntimeError("Agent lifecycle smoke request exceeds the control socket bound")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(5)
-        connection.connect(path)
-        connection.sendall(struct.pack("!I", len(encoded)) + encoded)
-        response_size = struct.unpack("!I", recv_exact(connection, 4))[0]
-        if not 1 <= response_size <= 1_048_576:
-            raise RuntimeError("Agent lifecycle smoke response exceeds the control socket bound")
-        response = json.loads(recv_exact(connection, response_size))
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(5)
+            connection.connect(path)
+            connection.sendall(struct.pack("!I", len(encoded)) + encoded)
+            response_size = struct.unpack("!I", recv_exact(connection, 4))[0]
+            if not 1 <= response_size <= 1_048_576:
+                raise RuntimeError("Agent lifecycle smoke response exceeds the control socket bound")
+            response = json.loads(recv_exact(connection, response_size))
+    except TimeoutError as error:
+        raise RuntimeError("Agent lifecycle control request exceeded its 5 second deadline") from error
     if response.get("ok") is not True:
         failure = response.get("error", {})
         raise RuntimeError("Desktop refused agent lifecycle fixture: " + str(failure.get("message", "unknown error")))
@@ -47,8 +50,26 @@ def control_request(path, request_id, command):
     return response.get("result")
 
 
-def seed_sidebar_agent(target_path, socket_path, receipt_path, stop_event, result):
-    deadline = time.monotonic() + 120
+def provider_session_uuid(provider, session_id):
+    value = "zmux-agent-provider-v1\0" + provider + "\0session\0" + session_id
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
+
+
+def provider_turn_uuid(provider, session_id, turn_id):
+    value = ("zmux-agent-provider-v1\0" + provider + "\0session\0" + session_id
+             + "\0turn\0" + turn_id)
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
+
+
+def is_non_nil_uuid(value):
+    try:
+        return uuid.UUID(value).int != 0
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def seed_sidebar_agents(target_path, socket_path, receipt_path, stop_event, result):
+    deadline = time.monotonic() + 90
     while not stop_event.is_set() and not target_path.exists():
         if time.monotonic() >= deadline:
             result["error"] = "Packaged app did not publish an exact terminal target for the lifecycle fixture"
@@ -61,37 +82,145 @@ def seed_sidebar_agent(target_path, socket_path, receipt_path, stop_event, resul
             raise RuntimeError("Agent lifecycle target manifest is not a regular fixture file")
         manifest = json.loads(target_path.read_text())
         target = manifest.get("target")
-        expected_owner = manifest.get("expected_owner")
-        if not isinstance(target, dict) or not isinstance(expected_owner, dict):
+        expected_owners = manifest.get("expected_owners")
+        if not isinstance(target, dict) or not isinstance(expected_owners, list):
             raise RuntimeError("Agent lifecycle target manifest is incomplete")
         required = ("identity_namespace", "surface_id", "surface_uuid", "session_id")
         if any(key not in target for key in required):
             raise RuntimeError("Agent lifecycle target manifest is incomplete")
-        runtime_id, generation, provider_session_id, prompt_id = (str(uuid.uuid4()) for _ in range(4))
+        expected_by_provider = {
+            entry.get("provider"): entry for entry in expected_owners if isinstance(entry, dict)
+        }
+        providers = {"claude_local", "codex_local", "opencode_local"}
+        if len(expected_by_provider) != len(expected_owners) or set(expected_by_provider) != providers:
+            raise RuntimeError("Agent lifecycle target manifest omitted an expected provider owner")
+        for provider, expected_owner in expected_by_provider.items():
+            if expected_owner.get("provider") != provider or any(
+                    str(expected_owner.get(key)).lower() != str(target.get(key)).lower()
+                    for key in ("identity_namespace", "surface_id", "surface_uuid", "session_id")):
+                raise RuntimeError("Provider target manifest does not share the exact current terminal owner")
+        common_owner = expected_by_provider["claude_local"]
+        owner_identity_keys = tuple(key for key in common_owner if key != "provider")
+        if any(any(str(expected_by_provider[provider].get(key)).lower() != str(common_owner.get(key)).lower()
+                       for key in owner_identity_keys)
+               for provider in providers):
+            raise RuntimeError("Provider fixtures do not share one exact existing terminal owner")
+
+        seeded_agents = []
+        request_id = 1
+        claude_runtime_id, claude_generation, claude_session_id, claude_prompt_id = (
+            str(uuid.uuid4()) for _ in range(4)
+        )
         registration = control_request(socket_path, 1, {"method": "agent_lifecycle", "request": {
             "request_id": str(uuid.uuid4()),
             "action": {"action": "register", "target": target, "provider": "claude_local",
-                       "runtime_id": runtime_id, "generation": generation,
-                       "provider_session_id": provider_session_id}
+                       "runtime_id": claude_runtime_id, "generation": claude_generation,
+                       "provider_session_id": claude_session_id}
         }})
+        request_id += 1
         capability = registration.get("capability") if isinstance(registration, dict) else None
         if not isinstance(registration, dict) or registration.get("accepted") is not True or not capability:
             raise RuntimeError("Desktop did not acknowledge agent lifecycle registration")
-        event = control_request(socket_path, 2, {"method": "agent_lifecycle", "request": {
+        event = control_request(socket_path, request_id, {"method": "agent_lifecycle", "request": {
             "request_id": str(uuid.uuid4()),
-            "action": {"action": "event", "capability": capability, "runtime_id": runtime_id,
-                       "generation": generation, "sequence": 1,
-                       "event": {"event": "prompt_submitted", "prompt_id": prompt_id}}
+            "action": {"action": "event", "capability": capability, "runtime_id": claude_runtime_id,
+                       "generation": claude_generation, "sequence": 1,
+                       "event": {"event": "prompt_submitted", "prompt_id": claude_prompt_id}}
         }})
+        request_id += 1
         if not isinstance(event, dict) or event.get("accepted") is not True:
             raise RuntimeError("Desktop did not acknowledge the PromptSubmitted lifecycle event")
-        evidence = {"success": True, "source": "same_uid_v2_control_socket",
-                    "registration_accepted": True, "event_accepted": True,
-                    "event": "prompt_submitted", "sequence": 1, "target": target,
-                    "expected_owner": {**expected_owner, "runtime_id": runtime_id,
-                                       "generation": generation, "provider_session_id": provider_session_id},
-                    "runtime_id": runtime_id, "generation": generation,
-                    "provider_session_id": provider_session_id, "prompt_id": prompt_id}
+        claude_owner = {
+            **expected_by_provider["claude_local"],
+            "runtime_id": claude_runtime_id,
+            "generation": claude_generation,
+            "provider_session_id": claude_session_id,
+        }
+        seeded_agents.append({
+            "provider": "claude_local",
+            "synthetic": True,
+            "source": "synthetic Claude lifecycle hook event through same-UID control",
+            "action": "register_and_prompt_submitted",
+            "registration_accepted": True,
+            "observation_accepted": True,
+            "state": "working",
+            "marker": "live",
+            "sequence": 1,
+            "expected_owner": claude_owner,
+            "runtime_id": claude_runtime_id,
+            "generation": claude_generation,
+            "provider_session_id": claude_session_id,
+            "prompt_id": claude_prompt_id,
+        })
+
+        generic_fixtures = [
+            ("codex_local", "codex", "thread:sidebar-smoke/codex-root", "turn:sidebar-smoke/codex-waiting", "waiting"),
+            ("opencode_local", "opencode", "session:sidebar-smoke/opencode-root", "turn:sidebar-smoke/opencode-idle", "idle"),
+        ]
+        for provider_tag, provider, session_id, turn_id, state in generic_fixtures:
+            if stop_event.is_set():
+                return
+            runtime_id, generation = str(uuid.uuid4()), str(uuid.uuid4())
+            expected_provider_session_id = provider_session_uuid(provider, session_id)
+            expected_prompt_id = provider_turn_uuid(provider, session_id, turn_id)
+            response = control_request(socket_path, request_id, {"method": "agent_lifecycle", "request": {
+                "request_id": str(uuid.uuid4()),
+                "action": {
+                    "action": "provider_observation",
+                    "target": target,
+                    "runtime_id": runtime_id,
+                    "generation": generation,
+                    "sequence": 1,
+                    "observation": {
+                        "provider": provider,
+                        "scope": "root",
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "state": state,
+                        "transition": "snapshot",
+                        "marker": "baseline",
+                    },
+                },
+            }})
+            request_id += 1
+            if not isinstance(response, dict) or response.get("accepted") is not True:
+                raise RuntimeError("Desktop did not acknowledge the synthetic " + provider + " baseline observation")
+            seeded_agents.append({
+                "provider": provider_tag,
+                "synthetic": True,
+                "source": "synthetic " + provider + " baseline observation through same-UID control",
+                "action": "provider_observation",
+                "observation_accepted": True,
+                "scope": "root",
+                "opaque_session_id": session_id,
+                "opaque_turn_id": turn_id,
+                "state": state,
+                "transition": "snapshot",
+                "marker": "baseline",
+                "sequence": 1,
+                "expected_owner": {
+                    **expected_by_provider[provider_tag],
+                    "runtime_id": runtime_id,
+                    "generation": generation,
+                    "provider_session_id": expected_provider_session_id,
+                },
+                "runtime_id": runtime_id,
+                "generation": generation,
+                "provider_session_id": expected_provider_session_id,
+                "prompt_id": expected_prompt_id,
+            })
+
+        evidence = {
+            "success": True,
+            "fixture_kind": "synthetic_provider_lifecycle_inputs",
+            "source": "same_uid_v2_control_socket",
+            "event_provenance": "synthetic lifecycle inputs; no provider process or model turn was invoked",
+            "audio_effect": "fixture inputs are silent lifecycle observations, not alert playback coverage",
+            "provider_processes_invoked": False,
+            "provider_turns_invoked": False,
+            "target": target,
+            "agents": seeded_agents,
+        }
         temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
         temporary.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
         temporary.replace(receipt_path)
@@ -159,7 +288,7 @@ def main():
                    "--env", "ZMUX_SIDEBAR_NONCE=" + nonce,
                    str(bundle), "--args", "--sidebar-grouping-smoke", str(report),
                    str(directory / "profile")]
-        agent_thread = threading.Thread(target=seed_sidebar_agent,
+        agent_thread = threading.Thread(target=seed_sidebar_agents,
                                         args=(agent_target, str(socket), agent_fixture, agent_stop, agent_fixture_result),
                                         name="native-sidebar-agent-fixture", daemon=True)
         agent_thread.start()
@@ -225,9 +354,10 @@ def main():
         required = ("compact_toolbar", "visible_toggle", "groups", "group_menus",
                     "collapse_preserves_terminal", "focus_preserved", "sidebar_restored",
                     "notification_toggle", "window_scoping", "native_terminal_damage",
-                    "agent_lifecycle_connected_working", "agent_row_visible",
+                    "agent_lifecycle_connected_working", "agent_lifecycle_provider_states",
+                    "agent_provider_labels_and_groups", "agent_row_visible",
                     "agent_selection_started_in_other_workspace", "agent_selection_exact_identity",
-                    "agent_no_new_surface_or_session")
+                    "agent_new_provider_selections_exact_identity", "agent_no_new_surface_or_session")
         failed = [key for key in required if result.get(key) is not True]
         if failed:
             raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
@@ -244,32 +374,131 @@ def main():
                 raise RuntimeError(f"Missing native screenshot: {path.name}")
         agent_result = json.loads(agent_fixture.read_text())
         owner = result.get("agent_identity")
+        native_agents = result.get("agent_identities")
+        native_projection = result.get("agent_projection")
+        native_selections = result.get("agent_selection_results")
         target = agent_result.get("target")
-        expected_owner = agent_result.get("expected_owner")
-        if not isinstance(owner, dict) or not isinstance(target, dict) or not isinstance(expected_owner, dict):
-            raise RuntimeError("Agent lifecycle acceptance omitted the exact target identity")
-        for key in ("identity_namespace", "surface_id", "surface_uuid", "session_id"):
-            if str(owner.get(key)).lower() != str(target.get(key)).lower():
-                raise RuntimeError("Packaged UI lifecycle owner does not match the socket fixture target: " + key)
-        for key in ("provider", "identity_namespace", "window_id", "window_uuid", "workspace_id",
-                    "workspace_uuid", "pane_id", "pane_uuid", "surface_id", "surface_uuid",
-                    "session_id", "runtime_id", "generation", "provider_session_id"):
-            if str(owner.get(key)).lower() != str(expected_owner.get(key)).lower():
-                raise RuntimeError("Rust-published lifecycle owner does not match the exact current owner: " + key)
-        if (owner.get("provider") != "claude_local" or owner.get("connection") != "connected"
-                or owner.get("activity") != "working" or owner.get("prompt_id_present") is not True
-                or agent_result.get("registration_accepted") is not True
-                or agent_result.get("event_accepted") is not True):
-            raise RuntimeError("Packaged UI lifecycle receipt does not match accepted Connected/Working evidence")
+        fixture_agents = agent_result.get("agents")
+        if (not isinstance(owner, dict) or not isinstance(target, dict)
+                or not isinstance(native_agents, list) or not isinstance(native_projection, list)
+                or not isinstance(native_selections, list) or not isinstance(fixture_agents, list)):
+            raise RuntimeError("Agent lifecycle acceptance omitted provider projection or exact owner evidence")
+        if (agent_result.get("success") is not True
+                or agent_result.get("fixture_kind") != "synthetic_provider_lifecycle_inputs"
+                or agent_result.get("provider_processes_invoked") is not False
+                or agent_result.get("provider_turns_invoked") is not False
+                or agent_result.get("audio_effect") != "fixture inputs are silent lifecycle observations, not alert playback coverage"
+                or not str(agent_result.get("event_provenance", "")).startswith("synthetic lifecycle inputs;")):
+            raise RuntimeError("Provider fixture did not label its synthetic-only evidence scope")
+
+        expected_projection = {
+            "claude_local": ("Claude Code", "working", "Working", "Working"),
+            "codex_local": ("Codex", "waiting", "Waiting for you", "Needs attention"),
+            "opencode_local": ("OpenCode", "idle", "Idle", "Idle"),
+        }
+
+        def index_unique(rows, key):
+            if not all(isinstance(row, dict) and isinstance(row.get(key), str) for row in rows):
+                raise RuntimeError("Provider acceptance receipt contains a malformed row")
+            indexed = {row[key]: row for row in rows}
+            if len(indexed) != len(rows):
+                raise RuntimeError("Provider acceptance receipt duplicated a provider row")
+            return indexed
+
+        fixture_by_provider = index_unique(fixture_agents, "provider")
+        native_by_provider = index_unique(native_agents, "provider")
+        projection_by_provider = index_unique(native_projection, "provider")
+        selection_by_provider = index_unique(native_selections, "provider")
+        if any(set(indexed) != set(expected_projection) for indexed in
+               (fixture_by_provider, native_by_provider, projection_by_provider, selection_by_provider)):
+            raise RuntimeError("Native sidebar did not project and select all three provider fixtures")
+
+        owner_keys = ("provider", "identity_namespace", "window_id", "window_uuid", "workspace_id",
+                      "workspace_uuid", "pane_id", "pane_uuid", "surface_id", "surface_uuid",
+                      "session_id", "runtime_id", "generation", "provider_session_id")
+        for provider, (provider_label, activity, status_label, group_label) in expected_projection.items():
+            fixture_agent = fixture_by_provider[provider]
+            native_agent = native_by_provider[provider]
+            projection = projection_by_provider[provider]
+            selection = selection_by_provider[provider]
+            expected_owner = fixture_agent.get("expected_owner")
+            if not isinstance(expected_owner, dict):
+                raise RuntimeError("Provider fixture omitted an exact expected terminal owner: " + provider)
+            for key in owner_keys:
+                if str(native_agent.get(key)).lower() != str(expected_owner.get(key)).lower():
+                    raise RuntimeError("Packaged UI provider owner does not match the exact fixture owner: " + provider + "." + key)
+            for key in ("identity_namespace", "surface_id", "surface_uuid", "session_id"):
+                if str(expected_owner.get(key)).lower() != str(target.get(key)).lower():
+                    raise RuntimeError("Provider fixture owner does not match its published terminal target: " + provider + "." + key)
+            if (fixture_agent.get("synthetic") is not True
+                    or not fixture_agent.get("source", "").startswith("synthetic ")
+                    or fixture_agent.get("observation_accepted") is not True
+                    or fixture_agent.get("sequence") != 1
+                    or not is_non_nil_uuid(fixture_agent.get("runtime_id"))
+                    or not is_non_nil_uuid(fixture_agent.get("generation"))
+                    or fixture_agent.get("state") != activity
+                    or native_agent.get("activity") != activity
+                    or native_agent.get("connection") != "connected"
+                    or native_agent.get("prompt_id_present") is not True
+                    or native_agent.get("prompt_id") != fixture_agent.get("prompt_id")
+                    or native_agent.get("provider_label") != provider_label
+                    or native_agent.get("status") != status_label
+                    or native_agent.get("group") != group_label
+                    or native_agent.get("selection_verified") is not True):
+                raise RuntimeError("Packaged UI lifecycle receipt does not match the accepted " + provider + " projection")
+            if (projection.get("provider_label") != provider_label
+                    or projection.get("activity") != activity
+                    or projection.get("status") != status_label
+                    or projection.get("group") != group_label
+                    or provider_label not in projection.get("row_accessibility_label", "")
+                    or not projection.get("row_accessibility_label", "").endswith(", " + status_label)
+                    or projection.get("group_accessibility_label") != group_label + ", 1 agents"):
+                raise RuntimeError("Native accessibility labels do not show the expected provider and group: " + provider)
+            if (selection.get("started_in_other_workspace") is not True
+                    or selection.get("exact_identity") is not True
+                    or selection.get("complete_inventory_unchanged") is not True):
+                raise RuntimeError("Provider selection did not preserve the exact owner and full PTY inventory: " + provider)
+            if provider == "claude_local":
+                if (fixture_agent.get("registration_accepted") is not True
+                        or fixture_agent.get("action") != "register_and_prompt_submitted"):
+                    raise RuntimeError("Claude compatibility selection omitted its existing lifecycle registration/event path")
+            else:
+                if (fixture_agent.get("action") != "provider_observation"
+                        or fixture_agent.get("transition") != "snapshot"
+                        or fixture_agent.get("marker") != "baseline"
+                        or not isinstance(fixture_agent.get("opaque_session_id"), str)
+                        or not isinstance(fixture_agent.get("opaque_turn_id"), str)
+                        or not fixture_agent.get("opaque_session_id", "").startswith(("thread:", "session:"))
+                        or not fixture_agent.get("opaque_turn_id", "").startswith("turn:")):
+                    raise RuntimeError("Generic provider fixture did not use labeled opaque baseline IDs: " + provider)
+                short_provider = provider.rsplit("_", 1)[0]
+                if (fixture_agent.get("provider_session_id") != provider_session_uuid(
+                            short_provider, fixture_agent["opaque_session_id"])
+                        or fixture_agent.get("prompt_id") != provider_turn_uuid(
+                            short_provider, fixture_agent["opaque_session_id"], fixture_agent["opaque_turn_id"])):
+                    raise RuntimeError("Opaque provider session/turn IDs did not match their documented projection: " + provider)
+                expected_opaque_ids = {
+                    "codex_local": ("thread:sidebar-smoke/codex-root", "turn:sidebar-smoke/codex-waiting"),
+                    "opencode_local": ("session:sidebar-smoke/opencode-root", "turn:sidebar-smoke/opencode-idle"),
+                }[provider]
+                if (fixture_agent.get("opaque_session_id"), fixture_agent.get("opaque_turn_id")) != expected_opaque_ids:
+                    raise RuntimeError("Provider smoke IDs are no longer opaque fixture strings: " + provider)
+
+        claude_fixture = fixture_by_provider["claude_local"]
+        if (owner != native_by_provider["claude_local"]
+                or owner.get("activity") != "working"
+                or owner.get("provider_label") != "Claude Code"
+                or owner.get("connection") != "connected"):
+            raise RuntimeError("Existing Claude selection receipt no longer identifies its exact Working owner")
         evidence.update(success=True, native=result, status_menu=status_result, agent_fixture=agent_result)
-        print("Native sidebar/grouping and populated agent selection checks, correlated app cleanup and PID absence passed")
+        print("Native sidebar provider grouping, exact selection, complete PTY inventory, and packaged cleanup checks passed")
     except Exception as error:
         evidence["error"] = str(error)
         raise
     finally:
         agent_stop.set()
         if agent_thread is not None:
-            agent_thread.join(timeout=5)
+            agent_thread.join(timeout=25)
         agent_target.unlink(missing_ok=True)
         receipt.write_text(json.dumps(evidence, indent=2) + "\n")
 

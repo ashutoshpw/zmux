@@ -532,3 +532,128 @@ Remaining limitations and acceptance gaps:
 - A lost alert receipt can leave the visual indication without sound. Alert delivery is at-least-once, so duplicate delivery remains possible.
 - Physical Mac use, audible real-provider events, and authenticated remote-provider behavior remain unverified.
 - The broader task is not complete; its unchecked design, provider, sound-preference, and remote-acceptance criteria remain open.
+
+## Provider compatibility follow-up — 2026-11-02
+
+- User reports Claude Code 2.1.316 is rejected and requests Codex/OpenCode support in the same Agents module. Scope includes lifecycle projection, exact terminal ownership and attention/completion alerts for local and managed SSH sessions.
+- Inspection confirmed the local Claude gate accepts only exact 2.1.301, and the CLI rejects Codex explicitly. Preserve current near-black UI, user configuration and provider trust; do not use hook-trust bypasses or substitute an unrelated provider session.
+- Plan: verify provider contracts; implement bounded provider-specific adapters using existing lifecycle/transport owners; add behavioral regressions at those owners; obtain independent Luna review; run scripts/check; deliver and verify a fresh universal macOS artifact.
+- Existing unrelated cloud-origin task edits, profile-lifecycle workflow and native-profile-lifecycle tool are outside this follow-up.
+
+### Accepted provider discovery
+
+- Claude: exact 2.1.301 gate is the observed compatibility defect; installed 2.1.316 retains repeatable plugin loading. Implement capability-checked compatibility and accurate version metadata, then CLI-boundary regression checks.
+- Codex 0.166.0: hooks run concurrently with user hooks; request/Stop observations are not post-handler outcomes. Preserve normal /hooks trust and approval decisions. Further focused research is checking whether the existing CLI completion notify/event channel can be composed without overwriting user settings.
+- OpenCode v2.2.1: invocation-scoped plugin receives session.status busy/retry/idle plus question/permission events. Bind root session exactly; never conflate subordinate/global sessions. Experimental idle alone is insufficient for completion unless paired with idle and no background tasks.
+- Shared design needs provider variants plus bounded provider-ID-to-UUID namespacing, preserving Zmux runtime/generation UUIDs, owner capabilities, SSH nonce/sequence fencing and Unknown on evidence loss.
+- Research sources: https://code.claude.com/docs/en/hooks ; https://code.claude.com/docs/en/changelog#2-1-316 ; https://learn.chatgpt.com/docs/hooks ; https://opencode.ai/docs/plugins/ ; https://opencode.ai/docs/config/ . No authenticated provider turn was executed during discovery.
+
+### Shared provider implementation started
+
+- Accepted Codex follow-up: 0.166.0 existing shared daemon documents thread/read/list/turns/list, thread/status/changed and turn/started/completed. Active wait flags distinguish approval/input from Working. Completion must identify a newly observed completed turn. Never call thread/start to monitor another CLI.
+- Exact Codex-to-terminal launch association remains mandatory: the daemon record has no PTY/PID/surface. Cwd, title, or a single cwd candidate are not sufficient identity evidence. Normal trusted SessionStart integration may supply the exact thread binding; live daemon proxy attachment was not established by the read-only probe. Preserve notify because invocation overrides replace it.
+- Shared implementation is assigned independently of the concurrent Claude compatibility edits: provider variants, opaque ID mapping, silent baseline/recovery semantics, managed SSH frames/owner routing and native provider labels. Later adapter producers will consume its documented interface.
+- Sources: https://learn.chatgpt.com/docs/app-server#api-overview ; https://learn.chatgpt.com/docs/config-file/config-advanced#notifications . Installed-schema inspection is contract evidence, not live callback acceptance.
+
+### Claude compatibility slice accepted — local evidence
+
+- Local gate now accepts 2.1.301–2.1.316 inclusive with repeatable --plugin-dir capability validation, bounded help capture, executable identity revalidation and actual version persistence. Existing valid 2.1.301 records remain accepted/idempotent. Future patches remain outside the reviewed band.
+- Worker reproduced the 2.1.316 CLI regression before the fix and passed the focused suite afterward against isolated baseline source with scoped changes: 11 passed, 1 ignored. cargo build --locked -p zmux and package formatting passed there. Installed 2.1.316 temporary install/status/uninstall also passed without a model/API turn or global config edit.
+- Shared checkout integration was still compiling the generic provider slice; source-wide checks, independent review, hosted/native acceptance and a new artifact remain pending.
+- Producer implementation is assigned for local/managed SSH Codex and OpenCode, consuming the shared normalized contract. Codex attachment must bind exact root thread using a supported launch association; no cwd-only guessing, trust bypass or notify replacement.
+
+### Shared lifecycle slice accepted — focused source checks
+
+- Generic Codex/OpenCode local/remote variants, opaque session/turn UUIDv5 projection and native provider labels implemented. Public local lifecycle actions admit observations and explicitly invalidate on evidence loss/provider exit; local control cannot claim a managed SSH route.
+- Managed SSH protocol v3 adds provider_state observations; every matching provider record follows transport heartbeat/loss/reconnect. Baseline/recovery, failures, interruptions and loss stay silent; completion requires the exact turn's prior live Working observation.
+- Worker checks passed: remote protocol tests (2); desktop lifecycle unit tests (14); desktop lifecycle integration tests (3); focused managed SSH gap and multi-provider reconnect; strict Clippy for both runtime crates; cargo fmt --all -- --check; git diff --check. These are scoped source checks, not full scripts/check, native package or real-provider acceptance.
+- Independent Luna review of the completed shared/Claude slices has started. The launch/plugin/daemon producer integration remains in progress in disjoint files.
+
+### Independent review: provider recovery corrections required
+
+- Luna review found three deterministic P2 regressions in generic recovery: a different-turn delayed baseline clears a live turn's completion eligibility; a silent Waiting snapshot does not suppress a replayed wait; replacing a locally lost record discards its turn dedupe histories.
+- Accepted fixes and regression interleavings are assigned to a dedicated runtime owner, disjoint from the ongoing CLI/shell producer implementation. Recovery must retain bounded observed-turn histories and generation fences while clearing completion eligibility, and never produce historical sounds.
+- Review found no additional issues in the completed Claude capability/version slice, provider labels, local-versus-SSH owner admission, capability-free receipts or multi-provider remote transport handling. Review did not establish live provider behavior. Full checks and packaging remain pending.
+
+### Recovery review fixes accepted — focused checks
+
+- Fixed all three review traces through production control-path regressions: same-generation silent snapshots preserve accepted live-turn state; silent Waiting snapshots mark the wait observed; local loss recovery reuses the provider-session record with dedupe/outcome history intact. A fourth trace fences delayed retired runtime/generation claims across repeated local loss.
+- Histories and retired identities each retain 128 marks per provider session; older marks can be evicted. Recovery clears completion eligibility, so no baseline can synthesize a completed run.
+- Each interleaving failed before the correction and passes afterward. Lifecycle unit tests (14), integration tests (3), desktop-runtime Clippy, scoped formatting and git diff --check passed.
+- Adapter producer implementation remains in progress; final independent integration review, full scripts/check and required universal artifact are not complete.
+
+### Producer slice implemented — integration acceptance in progress
+
+- Local and managed SSH Codex/OpenCode wrappers implemented. Codex preserves effective SessionStart hook entries and normal /hooks trust, obtains exact thread identity and reads the existing daemon; no notify override, approval decision or Stop-as-completion. OpenCode uses a standalone invocation-scoped plugin, preserving custom/global/project configuration and existing plugins.
+- Both providers use bounded sanitized events and true five-second source snapshots; remote frame ordering shares the managed lifecycle sequence and explicit loss/gap invalidates evidence.
+- Worker focused checks passed: CLI provider hooks 13 passed/2 ignored; SSH 3; CLI unit 12 passed/1 ignored; session lifecycle 16; shell integration 10 passed/2 ignored; strict Clippy, Rust formatting, Python/Node syntax and diff checks.
+- Installed OpenCode v2.2.1 accepted the plugin and empty-root callback without provider credentials/model turn. Installed Codex 0.166.0 accepted read-only daemon initialization/listing, but no thread was loaded: authenticated turn notifications remain unverified.
+- Independent integration/recovery review, full RUST_TEST_THREADS=2 scripts/check and expanded packaged native multi-provider acceptance are running. No scoped change has been committed or pushed yet, and no new accepted artifact exists.
+
+### Linux validation sub-agent — 2026-11-02
+
+- `RUST_TEST_THREADS=2 scripts/check` completed with exit 101 and stopped in `cargo test --workspace --locked`. The first failing target was `-p zmux --test agent_messages`: `session_local_hook_adapter_uses_actual_terminal_owner_and_never_writes_message_input` failed during synthetic plugin installation because its inline fake Claude handles `--version` but not the now-required `--help` capability probe. The CLI reported `Claude --help preflight did not exit successfully within its bounds`. Log: `/tmp/zmux-provider-support-check.log`.
+- To finish the workspace test binaries after Cargo's default fail-fast behavior, `RUST_TEST_THREADS=2 cargo test --workspace --locked --no-fail-fast` completed with exit 101. Three targets failed: the same `agent_messages` fixture; `-p zmux-desktop-runtime --lib`, where `remote_agent_lifecycle::tests::retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss` logged two closed streams (`hello=false, active=false`) and panicked `remote lifecycle stream was lost before hook` at `crates/desktop-runtime/src/remote_agent_lifecycle.rs:1211`; and `-p zmux-remote-runtime --test connection`, where `managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd` and `configured_remote_hooks_fallback_for_unreadable_payloads_and_ignore_other_notifications` received `gap` instead of `hook`, while `required_remote_receipt_failures_emit_a_generation_gap` received exit code 73 instead of 74. Log: `/tmp/zmux-provider-support-tests.log`.
+- The remaining `scripts/check` stages were run separately because its fail-fast test stage prevented them from running: `cargo clippy --workspace --all-targets --locked -- -D warnings` passed; `scripts/license-inventory --check` passed with 134 resolved packages, 100 distinct notice texts, and 3 packages without bundled top-level license text; `scripts/check-native-bridge` passed both C ABI checks. Logs: `/tmp/zmux-provider-support-clippy.log` and `/tmp/zmux-provider-support-native-bridge.log`.
+- The 3 packages lacking bundled license text (`r-efi`, `winapi-i686-pc-windows-gnu`, and `winapi-x86_64-pc-windows-gnu`) match the baseline inventory. The new direct `tungstenite 0.20.1` dependency is configured with default features disabled and only `handshake`; its notice inventory is current.
+- Installed OpenCode v2.2.1 and Codex 0.166.0 read-only acceptance was not repeated because the preceding worker evidence in this status covers those checks; Codex had no loaded thread. No credentials, provider turn, user configuration, or daemon state was changed by this validation.
+- The host is Linux. AppKit compilation and packaged universal macOS acceptance are not established by these checks. No production or test files were changed, and no commit, push, or hosted workflow was run.
+
+### Full-check remediation — 2026-11-02
+
+- Updated the existing inbox C provider fixture to advertise repeatable --plugin-dir on --help. The focused real-terminal inbox test now passes (all held/plan/retirement scenarios); no production behavior or test assertion was weakened. Log: /tmp/zmux-provider-inbox-fixture-fix.log.
+- Restored the existing v3 Claude hook envelope without a generation field in the managed stream; new generic provider observations still require explicit current generation, and any supplied stale generation is ignored. Unconditional generation enforcement had gapped existing Claude hook traffic before receipt handling.
+- Existing managed SSH connection suite now passes all 9 tests, including required-receipt failure semantics, unreadable payload fallback and loopback opener/hook routing. The managed SSH bootstrap-race/session-loss regression passes. Logs: /tmp/zmux-provider-remote-envelope-fix.log and /tmp/zmux-provider-bootstrap-fix.log.
+- Regenerated dependency notices using scripts/license-inventory for tungstenite and transitive packages. The three preexisting missing top-level license-text entries are unchanged.
+- RUST_TEST_THREADS=2 scripts/check rerun started at /tmp/zmux-provider-support-check-r2.log; independent provider review and native fixture extension remain running.
+
+### Packaged multi-provider fixture implemented — native run pending
+
+- Native sidebar fixture now seeds Claude Working, Codex Waiting and OpenCode Idle against the exact existing terminal owner through real production lifecycle control. Generic providers use opaque IDs and silent baseline observations. Inputs are explicitly synthetic, not real provider execution or audible acceptance.
+- Smoke validates all three labels/groups, reveals rows in the independent agent scroll view, selects each from another workspace and verifies the complete unchanged surface/session/PTY inventory per selection. The populated screenshot is captured with all groups visible.
+- Python syntax/help, Swift source-input glob closure and diff checks passed locally; this Linux host has no Swift/AppKit compiler. Independent fixture review and universal hosted compilation/execution remain pending.
+
+### Full portable validation passed
+
+- RUST_TEST_THREADS=2 scripts/check completed with exit 0 after the fixture and Claude v3 envelope fixes. Log: /tmp/zmux-provider-support-check-r2.log. This includes workspace tests, strict workspace all-target Clippy, dependency license inventory and native bridge ABI checks.
+- git diff --check passed. Native AppKit/Swift compilation and packaged multi-provider smoke remain hosted gates; the passing Linux suite does not establish a native build or authenticated provider-turn behavior.
+- Independent integration and packaged-fixture reviews remain pending. No source commit/push or new build workflow has started.
+
+### Native fixture review corrections
+
+- Fixed row lookup to match the provider label independently of subtitle separator position; default Terminal titles place the provider at the end of the subtitle.
+- Selection now checks the latest lifecycle activity/connection and current accessibility status immediately before the click, after focus, and after full PTY inventory collection. Acceptance identities are built from fresh final lifecycle records, never the initial captured records. Expired evidence fails the smoke instead of reporting initial Working/Waiting/Idle values.
+- Independent review confirmed actual control/request shapes, identity-keyed native row reuse and unchanged complete inventory assertions. Python syntax and git diff --check pass; AppKit warnings-as-errors and packaged execution remain hosted gates.
+
+### Final integration review fixes implemented
+
+- Codex invocations selecting a directory/profile now pass through untouched without tracking, because config/read cannot reproduce an explicitly selected profile/context. Local mcp passthrough now matches the remote adapter. Actual terminal launch regressions verify unchanged arguments, preserved hooks and a single provider launch for these cases.
+- Codex root records accept omitted/null parentThreadId and reject non-null parent IDs. The shared daemon fixture now omits the optional field, so both actual local and loopback-SSH adapter paths cover that valid schema case.
+- A normally ended persisted local session can resume with a fresh runtime/generation, retaining histories and retired-identity fences. The production control regression checks resumed Working/Connected and rejects the old generation.
+- Accepted local event sockets use blocking mode plus an absolute 200 ms frame budget. A real trickling peer can no longer extend every byte's deadline and hold teardown for minutes.
+- New remote provider FIFO writes obey the actual atomic limit: Python fpathconf, Node bounded/cached getconf with POSIX-minimum fallback. Oversized atomic frames report loss before writing; protocol frame bounds remain 4096 bytes.
+- Before-fix regressions reproduced omitted-root rejection, normal-exit resume rejection, changed cd/profile/mcp invocation args, unbounded trickle reception and oversized FIFO emission. Relevant logs: /tmp/zmux-provider-root-before.log, /tmp/zmux-provider-resume-before.log, /tmp/zmux-provider-trickle-before.log, /tmp/zmux-provider-context-before.log, /tmp/zmux-provider-context-v2-before.log, /tmp/zmux-provider-pipebuf-before-r2.log.
+- After-fix focused checks passed: CLI unit tests 13/1 ignored, provider hooks 13/2 ignored, SSH 3, lifecycle integration 3 and shell/plugin integration 11/2 ignored. Logs: /tmp/zmux-provider-review-cli-after-r2.log, /tmp/zmux-provider-review-runtime-after.log, /tmp/zmux-provider-review-plugin-after-r2.log. Final full-suite rerun and targeted independent re-review follow.
+
+### Final recheck and full-suite rerun
+
+- All six integration findings are fixed with the scope and limitations recorded in provider-adapters.md. A targeted independent Luna recheck also includes the native fixture label/freshness corrections.
+- Full RUST_TEST_THREADS=2 scripts/check r3 is running at /tmp/zmux-provider-support-check-r3.log. Socket connects now use the existing bounded socket2 pattern as well as absolute incoming-frame deadlines.
+- No new authenticated provider turn, Mac build, physical audio acceptance, source commit or push is claimed at this stage. The next delivery gate is clean review plus complete source checks, followed by cohesive commits and the existing universal workflow.
+
+### Full portable revalidation passed after final review fixes
+
+- RUST_TEST_THREADS=2 scripts/check r3 completed with exit 0. Log: /tmp/zmux-provider-support-check-r3.log. Workspace tests, strict all-target Clippy, license notices and both native bridge ABI checks passed.
+- The required macOS development workflow and Foundation checks are active in ashutoshpw/zmux. Native compilation/packaging remains unexecuted for these changes; final independent recheck is pending before cohesive commits and source-bound universal build delivery.
+
+### Final recheck accepted; passthrough proof completed
+
+- Independent recheck found no remaining source defects in the six corrections or native label/freshness fixes. It identified incomplete remote launch-count coverage. The managed SSH fixture now exports its launch counter and asserts exactly one provider launch per directory/profile/mcp passthrough. Both local and remote matrices also cover -C and -p short options.
+- Full RUST_TEST_THREADS=2 scripts/check r4 is running at /tmp/zmux-provider-support-check-r4.log for the final test-only additions. Core provider admission/selection files are staged as the first cohesive slice; unrelated work remains unstaged. No commit/push/build yet.
+- Optional non-null Codex parent rejection remains source-checked; omitted root parent and foreign-thread isolation are exercised through actual local/SSH fixtures. No live provider turn is claimed.
+
+### Source delivery commits — final portable checks green
+
+- RUST_TEST_THREADS=2 scripts/check r4 completed with exit 0 for the final local/SSH passthrough counter and short-option coverage. Log: /tmp/zmux-provider-support-check-r4.log.
+- Core lifecycle admission, recovery/dedupe and provider labels committed as 1a589a5. Local/managed SSH provider adapters, Claude compatibility, regression coverage, usage docs and generated dependency notices committed as 50ecf71. All commits use explicit scoped paths; unrelated cloud-origin/profile-lifecycle work remains untouched.
+- The native multi-provider smoke and task evidence form the final source slice. Swift/AppKit compilation, actual packaged rendering, universal architectures/signature verification and final artifact download are the remaining delivery gates.

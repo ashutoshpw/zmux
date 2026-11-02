@@ -687,9 +687,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await waitUntil { _ in self.coordinator.snapshot?.model.windows.count == 1 && self.snapshot?.frames.count == pids.count }
         try unchanged()
 
-        // Seed one real Rust-owned lifecycle record through the same-UID control
-        // socket. The Python driver submits the registration and event after this
-        // manifest appears; no UI model or FFI snapshot is fabricated here.
+        // Seed Rust-owned lifecycle records through the same-UID control socket.
+        // The driver submits Claude's hook-shaped event and synthetic Codex/
+        // OpenCode baseline observations after this manifest appears; no UI
+        // model or FFI snapshot is fabricated here.
         guard let fixtureSnapshot = snapshot,
               let exactWindowID = identity?.windowId,
               fixtureSnapshot.model.focusedWindow == exactWindowID,
@@ -749,8 +750,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "surface_uuid": surfaceUUID.uuidString.lowercased(),
             "session_id": targetSession
         ]
-        let expectedOwner: [String: Any] = [
-            "provider": "claude_local",
+        let ownerIdentity: [String: Any] = [
             "identity_namespace": fixtureSnapshot.model.identityNamespace.uuidString.lowercased(),
             "window_id": windowID,
             "window_uuid": windowUUID.uuidString.lowercased(),
@@ -762,36 +762,125 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "surface_uuid": surfaceUUID.uuidString.lowercased(),
             "session_id": targetSession
         ]
-        let agentManifest: [String: Any] = ["target": agentTarget, "expected_owner": expectedOwner]
+        let expectedOwners = ["claude_local", "codex_local", "opencode_local"].map { provider -> [String: Any] in
+            var owner = ownerIdentity
+            owner["provider"] = provider
+            return owner
+        }
+        let agentManifest: [String: Any] = ["target": agentTarget, "expected_owners": expectedOwners]
         try JSONSerialization.data(withJSONObject: agentManifest, options: [.sortedKeys]).write(to: agentTargetManifest, options: .atomic)
         try await waitUntil { value in
-            guard let records = value.agentLifecycle, records.count == 1,
-                  let record = records.first else { return false }
-            return record.identityNamespace == fixtureSnapshot.model.identityNamespace
-                && record.surfaceId == targetSurface.id && record.surfaceUuid == surfaceUUID
-                && record.sessionId == targetSession && record.windowId == windowID && record.windowUuid == windowUUID
-                && record.workspaceId == workspaceID && record.workspaceUuid == workspaceUUID
-                && record.paneId == paneID && record.paneUuid == paneUUID && record.connection == "connected"
-                && record.activity == "working" && record.promptId != nil
+            guard let records = value.agentLifecycle, records.count == 3,
+                  Set(records.map(\.provider)) == Set(["claude_local", "codex_local", "opencode_local"]) else { return false }
+            return records.allSatisfy { record in
+                let expectedActivity: String
+                switch record.provider {
+                case "claude_local": expectedActivity = "working"
+                case "codex_local": expectedActivity = "waiting"
+                case "opencode_local": expectedActivity = "idle"
+                default: return false
+                }
+                return record.identityNamespace == fixtureSnapshot.model.identityNamespace
+                    && record.surfaceId == targetSurface.id && record.surfaceUuid == surfaceUUID
+                    && record.sessionId == targetSession && record.windowId == windowID && record.windowUuid == windowUUID
+                    && record.workspaceId == workspaceID && record.workspaceUuid == workspaceUUID
+                    && record.paneId == paneID && record.paneUuid == paneUUID && record.connection == "connected"
+                    && record.activity == expectedActivity && record.promptId != nil
+            }
         }
-        guard let record = snapshot?.agentLifecycle?.first(where: {
-            $0.identityNamespace == fixtureSnapshot.model.identityNamespace
-                && $0.surfaceId == targetSurface.id && $0.surfaceUuid == surfaceUUID
-                && $0.sessionId == targetSession && $0.windowId == windowID && $0.windowUuid == windowUUID
-                && $0.workspaceId == workspaceID && $0.workspaceUuid == workspaceUUID
-                && $0.paneId == paneID && $0.paneUuid == paneUUID
-        }), record.connection == "connected", record.activity == "working", record.promptId != nil,
-              agentSidebarList.arrangedSubviews.count == 2,
-              let agentRow = agentSidebarList.arrangedSubviews.last else {
-            throw BridgeFailure(message: "Rust lifecycle record did not produce one visible Working agent row")
+        func lifecycleRecord(provider: String) throws -> AgentLifecycleRecord {
+            guard let records = snapshot?.agentLifecycle,
+                  let matches = records.filter({ $0.provider == provider }).first,
+                  records.filter({ $0.provider == provider }).count == 1,
+                  matches.identityNamespace == fixtureSnapshot.model.identityNamespace,
+                  matches.surfaceId == targetSurface.id, matches.surfaceUuid == surfaceUUID,
+                  matches.sessionId == targetSession, matches.windowId == windowID, matches.windowUuid == windowUUID,
+                  matches.workspaceId == workspaceID, matches.workspaceUuid == workspaceUUID,
+                  matches.paneId == paneID, matches.paneUuid == paneUUID,
+                  matches.connection == "connected", matches.promptId != nil else {
+                throw BridgeFailure(message: "Rust lifecycle snapshot did not preserve the exact existing terminal owner for \(provider)")
+            }
+            return matches
         }
-        agentRow.scrollToVisible(agentRow.bounds)
-        content.layoutSubtreeIfNeeded()
-        let agentRowVisible = !agentRow.isHiddenOrHasHiddenAncestor && agentRow.visibleRect.width > 0 && agentRow.visibleRect.height > 0
-        guard agentRowVisible else { throw BridgeFailure(message: "Populated Agents row is outside its visible scroll viewport") }
+        let claudeRecord = try lifecycleRecord(provider: "claude_local")
+        let codexRecord = try lifecycleRecord(provider: "codex_local")
+        let opencodeRecord = try lifecycleRecord(provider: "opencode_local")
+        guard claudeRecord.activity == "working", codexRecord.activity == "waiting", opencodeRecord.activity == "idle" else {
+            throw BridgeFailure(message: "Rust lifecycle records did not project the expected Working, Waiting, and Idle states")
+        }
 
-        guard let owner = fixtureSnapshot.model.windows.first(where: { $0.id == record.windowId }),
-              let otherWorkspaceID = owner.workspaceIds.first(where: { $0 != record.workspaceId }),
+        window.setContentSize(NSSize(width: 900, height: 760))
+        applySidebarLayout()
+        content.layoutSubtreeIfNeeded()
+        guard let workspaceScroll = sidebarScroll else { throw BridgeFailure(message: "Workspace sidebar scroll view is unavailable") }
+        let workspaceScrollOrigin = workspaceScroll.contentView.bounds.origin
+        let expectedAgentRows: [(provider: String, label: String, activity: String, status: String, group: String)] = [
+            ("claude_local", "Claude Code", "working", "Working", "Working"),
+            ("codex_local", "Codex", "waiting", "Waiting for you", "Needs attention"),
+            ("opencode_local", "OpenCode", "idle", "Idle", "Idle")
+        ]
+        var rowsByProvider: [String: NSView] = [:]
+        var agentProjection: [[String: Any]] = []
+        for expected in expectedAgentRows {
+            guard let row = agentSidebarList.arrangedSubviews.first(where: { candidate in
+                (candidate.accessibilityLabel() ?? "").contains(expected.label)
+                    && candidate.accessibilityValue() as? String == expected.status
+            }),
+                  let label = row.accessibilityLabel(),
+                  let group = agentSidebarList.arrangedSubviews.first(where: {
+                      ($0.accessibilityLabel() ?? "").hasPrefix("\(expected.group), ")
+                  }),
+                  group.accessibilityValue() as? String == "Expanded" else {
+                throw BridgeFailure(message: "Native sidebar omitted the \(expected.label) row or its \(expected.group) group")
+            }
+            row.scrollToVisible(row.bounds)
+            content.layoutSubtreeIfNeeded()
+            guard !row.isHiddenOrHasHiddenAncestor,
+                  row.visibleRect.width >= row.bounds.width - 1,
+                  row.visibleRect.height >= row.bounds.height - 1,
+                  workspaceScroll.contentView.bounds.origin == workspaceScrollOrigin else {
+                throw BridgeFailure(message: "Agent list scrolling failed to reveal the \(expected.label) row independently of Spaces")
+            }
+            rowsByProvider[expected.provider] = row
+            agentProjection.append([
+                "provider": expected.provider,
+                "provider_label": expected.label,
+                "activity": expected.activity,
+                "status": expected.status,
+                "group": expected.group,
+                "row_accessibility_label": label,
+                "group_accessibility_label": group.accessibilityLabel() ?? ""
+            ])
+        }
+        let agentRowVisible = rowsByProvider.count == 3 && rowsByProvider.values.allSatisfy { row in
+            !row.isHiddenOrHasHiddenAncestor
+                && row.visibleRect.width >= row.bounds.width - 1
+                && row.visibleRect.height >= row.bounds.height - 1
+        }
+        let groupLabels = Set(agentSidebarList.arrangedSubviews.compactMap { candidate -> String? in
+            guard let label = candidate.accessibilityLabel(),
+                  label.hasPrefix("Needs attention, ") || label.hasPrefix("Working, ") || label.hasPrefix("Idle, ") else {
+                return nil
+            }
+            return label
+        })
+        guard agentRowVisible,
+              groupLabels == Set(["Needs attention, 1 agents", "Working, 1 agents", "Idle, 1 agents"]) else {
+            throw BridgeFailure(message: "Populated Agents rows or grouped state headers are incomplete")
+        }
+        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-agents.png"))
+        window.setContentSize(NSSize(width: 900, height: 420))
+        applySidebarLayout()
+        content.layoutSubtreeIfNeeded()
+        let requiresAgentScroll = rowsByProvider.values.contains { row in
+            row.visibleRect.height < row.bounds.height - 1
+        }
+        guard requiresAgentScroll else {
+            throw BridgeFailure(message: "Compact provider fixture did not exercise the independent Agents scroll viewport")
+        }
+
+        guard let owner = fixtureSnapshot.model.windows.first(where: { $0.id == claudeRecord.windowId }),
+              let otherWorkspaceID = owner.workspaceIds.first(where: { $0 != claudeRecord.workspaceId }),
               let otherWorkspaceRow = workspaceRows.first(where: { $0.value == otherWorkspaceID })?.key else {
             throw BridgeFailure(message: "Agent selection fixture has no different workspace to focus first")
         }
@@ -836,7 +925,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                             throw BridgeFailure(message: "Targeted pane surface read disagreed with the complete workspace model")
                         }
                         if surfaceID == targetSurface.id {
-                            guard windowUUID == record.windowUuid, surfaceUUID == record.surfaceUuid,
+                            guard windowUUID == claudeRecord.windowUuid, surfaceUUID == claudeRecord.surfaceUuid,
                                   sessionID == targetSession, stateName == "running", processID != nil else {
                                 throw BridgeFailure(message: "Target terminal targeted read did not confirm its running PTY process")
                             }
@@ -854,78 +943,151 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             return (surfacesByID, processIDsBySurface)
         }
         let selectionInventory = try await surfacePTYInventory(selectionBaseline)
-        try click(otherWorkspaceRow)
-        try await waitUntil { $0.model.focusedWindow == record.windowId && $0.model.focusedWorkspace == otherWorkspaceID }
-        guard snapshot?.model.focusedWorkspace == otherWorkspaceID else {
-            throw BridgeFailure(message: "Could not move focus away from the agent terminal before selecting its row")
+        func selectionMatches(_ target: AgentLifecycleRecord, in state: DesktopSnapshot) -> Bool {
+            guard state.agentLifecycle?.contains(where: {
+                $0.matchesSelectionTarget(target) && $0.activity == target.activity && $0.connection == "connected"
+            }) == true,
+                  state.model.focusedWindow == target.windowId,
+                  let workspace = state.model.workspaces.first(where: { $0.id == target.workspaceId }),
+                  workspace.focusedPane == target.paneId,
+                  let pane = workspace.root.panes.first(where: { $0.id == target.paneId }),
+                  pane.selectedSurface == target.surfaceId,
+                  let surface = pane.surfaces.first(where: { $0.id == target.surfaceId }) else { return false }
+            return surface.kind == "terminal" && surface.sessionId == target.sessionId
         }
-        try click(agentRow, at: NSPoint(x: 3, y: agentRow.bounds.midY))
-        try await waitUntil { value in
-            guard value.model.focusedWindow == record.windowId,
-                  let workspace = value.model.workspaces.first(where: { $0.id == record.workspaceId }),
-                  workspace.focusedPane == record.paneId,
-                  let pane = workspace.root.panes.first(where: { $0.id == record.paneId }),
-                  pane.selectedSurface == record.surfaceId,
-                  let surface = pane.surfaces.first(where: { $0.id == record.surfaceId }) else { return false }
-            return surface.kind == "terminal" && surface.sessionId == record.sessionId
+        var selectionResults: [[String: Any]] = []
+        for expected in expectedAgentRows {
+            let target: AgentLifecycleRecord
+            switch expected.provider {
+            case "claude_local": target = claudeRecord
+            case "codex_local": target = codexRecord
+            case "opencode_local": target = opencodeRecord
+            default: throw BridgeFailure(message: "Native provider selection fixture has an unsupported provider")
+            }
+            otherWorkspaceRow.scrollToVisible(otherWorkspaceRow.bounds)
+            content.layoutSubtreeIfNeeded()
+            guard !otherWorkspaceRow.isHiddenOrHasHiddenAncestor,
+                  otherWorkspaceRow.visibleRect.width >= otherWorkspaceRow.bounds.width - 1,
+                  otherWorkspaceRow.visibleRect.height >= otherWorkspaceRow.bounds.height - 1 else {
+                throw BridgeFailure(message: "Other workspace row was not visible before its selection callback")
+            }
+            let workspaceOriginBeforeAgentReveal = workspaceScroll.contentView.bounds.origin
+            try click(otherWorkspaceRow)
+            try await waitUntil { $0.model.focusedWindow == target.windowId && $0.model.focusedWorkspace == otherWorkspaceID }
+            guard snapshot?.model.focusedWorkspace == otherWorkspaceID,
+                  let row = rowsByProvider[expected.provider] else {
+                throw BridgeFailure(message: "Could not focus another workspace before selecting the \(expected.label) row")
+            }
+            row.scrollToVisible(row.bounds)
+            content.layoutSubtreeIfNeeded()
+            guard !row.isHiddenOrHasHiddenAncestor,
+                  row.visibleRect.width >= row.bounds.width - 1,
+                  row.visibleRect.height >= row.bounds.height - 1,
+                  workspaceScroll.contentView.bounds.origin == workspaceOriginBeforeAgentReveal,
+                  row.accessibilityValue() as? String == expected.status,
+                  let beforeSelectionSnapshot = snapshot,
+                  beforeSelectionSnapshot.agentLifecycle?.contains(where: {
+                      $0.matchesSelectionTarget(target) && $0.activity == expected.activity && $0.connection == "connected"
+                  }) == true else {
+                throw BridgeFailure(message: "The \(expected.label) row was not revealed in the independent Agents scroll view")
+            }
+            try click(row, at: NSPoint(x: 3, y: row.bounds.midY))
+            try await waitUntil { selectionMatches(target, in: $0) }
+            guard let selectedSnapshot = snapshot, selectionMatches(target, in: selectedSnapshot) else {
+                throw BridgeFailure(message: "The \(expected.label) row did not select its exact provider and terminal identity")
+            }
+            let afterInventory = try await surfacePTYInventory(selectedSnapshot)
+            let changedSurfaceIDs = Set(selectionInventory.surfaces.keys).union(afterInventory.surfaces.keys)
+                .filter { selectionInventory.surfaces[$0] != afterInventory.surfaces[$0] }.sorted()
+            let targetPTYUnchanged = selectionInventory.processIDs[targetSurface.id] != nil
+                && selectionInventory.processIDs[targetSurface.id] == afterInventory.processIDs[targetSurface.id]
+            let completeInventoryUnchanged = selectionInventory.surfaces == afterInventory.surfaces
+                && selectionInventory.processIDs == afterInventory.processIDs
+            guard changedSurfaceIDs.isEmpty, targetPTYUnchanged, completeInventoryUnchanged,
+                  let afterInventorySnapshot = snapshot, selectionMatches(target, in: afterInventorySnapshot) else {
+                let changes = changedSurfaceIDs.prefix(8).map { id in
+                    "\(id):before=\(selectionInventory.surfaces[id] ?? "absent"),after=\(afterInventory.surfaces[id] ?? "absent")"
+                }.joined(separator: ";")
+                throw BridgeFailure(message: "\(expected.label) selection changed the complete surface/session/PTY inventory; target_pid_before=\(String(describing: selectionInventory.processIDs[targetSurface.id])),target_pid_after=\(String(describing: afterInventory.processIDs[targetSurface.id])),changes=[\(changes)]")
+            }
+            selectionResults.append([
+                "provider": target.provider,
+                "started_in_other_workspace": true,
+                "exact_identity": true,
+                "complete_inventory_unchanged": true
+            ])
         }
-        guard let selectedSnapshot = snapshot,
-              selectedSnapshot.agentLifecycle?.contains(where: { $0.matchesSelectionTarget(record) }) == true,
-              selectedSnapshot.model.focusedWindow == record.windowId,
-              let selectedWorkspace = selectedSnapshot.model.workspaces.first(where: { $0.id == record.workspaceId }),
-              selectedWorkspace.focusedPane == record.paneId,
-              let selectedPane = selectedWorkspace.root.panes.first(where: { $0.id == record.paneId }),
-              selectedPane.selectedSurface == record.surfaceId,
-              let selectedSurface = selectedPane.surfaces.first(where: { $0.id == record.surfaceId }),
-              selectedSurface.kind == "terminal", selectedSurface.sessionId == record.sessionId else {
-            throw BridgeFailure(message: "Agent row did not focus its exact current window/workspace/pane/surface/session")
+        func lifecycleIdentity(_ record: AgentLifecycleRecord) throws -> [String: Any] {
+            guard let expected = expectedAgentRows.first(where: { $0.provider == record.provider }),
+                  let projection = agentProjection.first(where: { $0["provider"] as? String == record.provider }) else {
+                throw BridgeFailure(message: "Native provider receipt omitted the \(record.provider) sidebar projection")
+            }
+            return [
+                "provider": record.provider,
+                "provider_label": expected.label,
+                "group": expected.group,
+                "status": expected.status,
+                "row_accessibility_label": projection["row_accessibility_label"] as? String ?? "",
+                "group_accessibility_label": projection["group_accessibility_label"] as? String ?? "",
+                "identity_namespace": record.identityNamespace.uuidString.lowercased(),
+                "window_id": record.windowId,
+                "window_uuid": record.windowUuid.uuidString.lowercased(),
+                "workspace_id": record.workspaceId,
+                "workspace_uuid": record.workspaceUuid.uuidString.lowercased(),
+                "pane_id": record.paneId,
+                "pane_uuid": record.paneUuid.uuidString.lowercased(),
+                "surface_id": record.surfaceId,
+                "surface_uuid": record.surfaceUuid.uuidString.lowercased(),
+                "session_id": record.sessionId,
+                "runtime_id": record.runtimeId.uuidString.lowercased(),
+                "generation": record.generation.uuidString.lowercased(),
+                "provider_session_id": record.providerSessionId.uuidString.lowercased(),
+                "prompt_id": record.promptId?.uuidString.lowercased() ?? "",
+                "activity": record.activity,
+                "connection": record.connection,
+                "prompt_id_present": record.promptId != nil,
+                "selection_verified": selectionResults.contains(where: { $0["provider"] as? String == record.provider })
+            ]
         }
-        let afterInventory = try await surfacePTYInventory(selectedSnapshot)
-        let changedSurfaceIDs = Set(selectionInventory.surfaces.keys).union(afterInventory.surfaces.keys)
-            .filter { selectionInventory.surfaces[$0] != afterInventory.surfaces[$0] }.sorted()
-        let targetPTYUnchanged = selectionInventory.processIDs[targetSurface.id] != nil
-            && selectionInventory.processIDs[targetSurface.id] == afterInventory.processIDs[targetSurface.id]
-        let noReplacement = changedSurfaceIDs.isEmpty && targetPTYUnchanged
-        guard noReplacement else {
-            let changes = changedSurfaceIDs.prefix(8).map { id in
-                "\(id):before=\(selectionInventory.surfaces[id] ?? "absent"),after=\(afterInventory.surfaces[id] ?? "absent")"
-            }.joined(separator: ";")
-            throw BridgeFailure(message: "Agent row selection changed surface/session/PTY inventory; target_pid_before=\(String(describing: selectionInventory.processIDs[targetSurface.id])),target_pid_after=\(String(describing: afterInventory.processIDs[targetSurface.id])),changes=[\(changes)]")
+        let currentRecords = try expectedAgentRows.map { expected -> AgentLifecycleRecord in
+            let record = try lifecycleRecord(provider: expected.provider)
+            guard record.activity == expected.activity else {
+                throw BridgeFailure(message: "The \(expected.label) state expired before the native acceptance receipt")
+            }
+            return record
         }
-        let agentIdentity: [String: Any] = [
-            "provider": record.provider,
-            "identity_namespace": record.identityNamespace.uuidString.lowercased(),
-            "window_id": record.windowId,
-            "window_uuid": record.windowUuid.uuidString.lowercased(),
-            "workspace_id": record.workspaceId,
-            "workspace_uuid": record.workspaceUuid.uuidString.lowercased(),
-            "pane_id": record.paneId,
-            "pane_uuid": record.paneUuid.uuidString.lowercased(),
-            "surface_id": record.surfaceId,
-            "surface_uuid": record.surfaceUuid.uuidString.lowercased(),
-            "session_id": record.sessionId,
-            "runtime_id": record.runtimeId.uuidString.lowercased(),
-            "generation": record.generation.uuidString.lowercased(),
-            "provider_session_id": record.providerSessionId.uuidString.lowercased(),
-            "activity": record.activity,
-            "connection": record.connection,
-            "prompt_id_present": record.promptId != nil
-        ]
+        let agentIdentities = try currentRecords.map(lifecycleIdentity)
+        guard let currentClaudeRecord = currentRecords.first(where: { $0.provider == "claude_local" }) else {
+            throw BridgeFailure(message: "Native acceptance receipt lost the Claude lifecycle record")
+        }
+        let agentIdentity = try lifecycleIdentity(currentClaudeRecord)
+        let newProviderSelectionsVerified = selectionResults.filter {
+            ["codex_local", "opencode_local"].contains($0["provider"] as? String ?? "")
+        }.count == 2
+        let noReplacement = selectionResults.allSatisfy { $0["complete_inventory_unchanged"] as? Bool == true }
         agentAcceptance = [
             "agent_lifecycle_connected_working": true,
+            "agent_lifecycle_provider_states": true,
+            "agent_provider_labels_and_groups": true,
             "agent_row_visible": agentRowVisible,
             "agent_selection_started_in_other_workspace": true,
             "agent_selection_exact_identity": true,
+            "agent_new_provider_selections_exact_identity": newProviderSelectionsVerified,
             "agent_no_new_surface_or_session": noReplacement,
-            "agent_identity": agentIdentity
+            "agent_identity": agentIdentity,
+            "agent_identities": agentIdentities,
+            "agent_projection": agentProjection,
+            "agent_selection_results": selectionResults
         ]
-        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-agents.png"))
         try unchanged()
 
         try click(notificationButton)
         guard showingNotifications else { throw BridgeFailure(message: "Bell did not open inbox") }
         try click(notificationButton)
-        guard !showingNotifications, sidebarScroll?.documentView === workspaceList else { throw BridgeFailure(message: "Bell did not return to workspaces") }
+        guard !showingNotifications, sidebarScroll?.documentView === workspaceList,
+              !sidebarSections.isHidden, agentSidebarList.superview != nil else {
+            throw BridgeFailure(message: "Bell did not restore Spaces and the independently scrolling Agents section")
+        }
         try click(sidebarToggleButton)
         guard sidebarCollapsed, !collapsedSidebarToggleButton.isHiddenOrHasHiddenAncestor, sidebarContainer.bounds.width == 0 else { throw BridgeFailure(message: "Sidebar toggle vanished when collapsed") }
         try unchanged()
