@@ -12,12 +12,17 @@ pub use zmux_ghostty_vt::Limits as GhosttyLimits;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use subtle::ConstantTimeEq as _;
+use zmux_program_status::{
+    FEATURE_DETECTION_REPLY, IngestOutcome, ProgramStatusSnapshot, ProgramStatusStore, SessionEpoch,
+};
 
 pub const MAX_PROGRAM_OPEN_REQUESTS: usize = 8;
 pub const MAX_PROGRAM_OPEN_URL_BYTES: usize = 8_192;
 const MAX_PROGRAM_OPEN_URL_BASE64_BYTES: usize = 10_923;
 const MAX_LINK_SPANS: usize = 512;
 const MAX_LINK_SPAN_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_CAUSAL_REPLY_BYTES: usize = 8 * 1024;
+const PRIMARY_DEVICE_ATTRIBUTES_REPLY: &[u8] = b"\x1b[?62c";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -94,6 +99,14 @@ pub enum TerminalError {
     ViewportGenerationExhausted,
     #[error("terminal owner failed; session recovery required")]
     Failed,
+    #[error("program-status storage allocation failed")]
+    ProgramStatusAllocation,
+    #[error("program-status snapshot allocation failed")]
+    ProgramStatusSnapshot,
+    #[error("program-status lifecycle cursor exhausted; session recovery required")]
+    ProgramStatusLifecycle,
+    #[error("terminal causal reply queue exceeded its bound; session recovery required")]
+    CausalReplyOverflow,
     #[error(transparent)]
     InvalidSize(#[from] InvalidSize),
 }
@@ -154,6 +167,11 @@ pub struct Viewport {
     pub scrollback_offset: usize,
     pub scrollback_lines: usize,
     pub alternate_screen: bool,
+    /// In-process terminal-local status. Public Rust readers can inspect it,
+    /// while unbounded control/native frame serialization is owned by the
+    /// separately budgeted desktop projection.
+    #[serde(skip_serializing)]
+    pub program_status: ProgramStatusSnapshot,
 }
 
 /// A native routing hint; report encoding still uses the worker's current mode.
@@ -198,7 +216,6 @@ pub struct Terminal {
     _worker_owned: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[derive(Default)]
 struct Metadata {
     title: String,
     notices: Vec<TerminalNotice>,
@@ -207,6 +224,48 @@ struct Metadata {
     expected_open_nonce: Option<[u8; 16]>,
     open_requests: VecDeque<ProgramOpenRequest>,
     open_requests_overflowed: bool,
+    program_status: ProgramStatusStore,
+    replies: [u8; MAX_CAUSAL_REPLY_BYTES],
+    reply_length: usize,
+    reply_overflowed: bool,
+    program_status_failed: bool,
+}
+
+impl Metadata {
+    fn try_new(
+        expected_open_nonce: Option<[u8; 16]>,
+        session_epoch: SessionEpoch,
+    ) -> Result<Self, TerminalError> {
+        let program_status = ProgramStatusStore::try_new(session_epoch)
+            .map_err(|_| TerminalError::ProgramStatusAllocation)?;
+        Ok(Self {
+            title: String::new(),
+            notices: Vec::new(),
+            next_notice: 0,
+            working_directory: None,
+            expected_open_nonce,
+            open_requests: VecDeque::new(),
+            open_requests_overflowed: false,
+            program_status,
+            replies: [0; MAX_CAUSAL_REPLY_BYTES],
+            reply_length: 0,
+            reply_overflowed: false,
+            program_status_failed: false,
+        })
+    }
+
+    fn queue_reply(&mut self, reply: &[u8]) {
+        let Some(end) = self.reply_length.checked_add(reply.len()) else {
+            self.reply_overflowed = true;
+            return;
+        };
+        if end > self.replies.len() {
+            self.reply_overflowed = true;
+            return;
+        }
+        self.replies[self.reply_length..end].copy_from_slice(reply);
+        self.reply_length = end;
+    }
 }
 
 fn display_text(bytes: &[u8], limit: usize) -> String {
@@ -266,6 +325,12 @@ impl Metadata {
     }
 }
 impl vt100::Callbacks for Metadata {
+    fn ris(&mut self, _: &mut vt100::Screen) {
+        if self.program_status.ris().is_err() {
+            self.program_status_failed = true;
+        }
+    }
+
     fn audible_bell(&mut self, _: &mut vt100::Screen) {
         self.notice("bell", b"Terminal needs attention", b"");
     }
@@ -274,6 +339,24 @@ impl vt100::Callbacks for Metadata {
     }
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         self.title = display_text(title, 256);
+    }
+
+    fn unhandled_csi(
+        &mut self,
+        _: &mut vt100::Screen,
+        private: Option<u8>,
+        intermediate: Option<u8>,
+        params: &[&[u16]],
+        final_char: char,
+    ) {
+        if private.is_none()
+            && intermediate.is_none()
+            && final_char == 'c'
+            && (params.is_empty()
+                || (params.len() == 1 && (params[0].is_empty() || params[0] == [0])))
+        {
+            self.queue_reply(PRIMARY_DEVICE_ATTRIBUTES_REPLY);
+        }
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
@@ -325,10 +408,52 @@ impl vt100::Callbacks for Metadata {
             });
         }
     }
+
+    fn unhandled_osc_raw(
+        &mut self,
+        _: &mut vt100::Screen,
+        body: &[u8],
+        body_length: usize,
+        truncated: bool,
+        terminator: vt100::OscTerminator,
+    ) {
+        if truncated || body.len() != body_length {
+            return;
+        }
+        let terminator_len = match terminator {
+            vt100::OscTerminator::Bell => 1,
+            vt100::OscTerminator::StringTerminator => 2,
+            vt100::OscTerminator::Cancelled(_) | vt100::OscTerminator::Escape => return,
+        };
+
+        if let Some(args) = body.strip_prefix(b"7501;") {
+            let full_sequence_len = match args.len().checked_add(7 + terminator_len) {
+                Some(length) => length,
+                None => return,
+            };
+            match self.program_status.ingest(args, full_sequence_len) {
+                IngestOutcome::Ignored(zmux_program_status::IgnoreReason::FeatureQuery) => {
+                    self.queue_reply(FEATURE_DETECTION_REPLY);
+                }
+                IngestOutcome::Failed(_) => self.program_status_failed = true,
+                IngestOutcome::Ignored(_)
+                | IngestOutcome::Rejected(_)
+                | IngestOutcome::Applied { .. } => {}
+            }
+            return;
+        }
+
+        if let Some(args) = body.strip_prefix(b"133;")
+            && args.split(|byte| *byte == b';').next() == Some(b"A")
+            && self.program_status.prompt_boundary().is_err()
+        {
+            self.program_status_failed = true;
+        }
+    }
 }
 
 impl Terminal {
-    pub fn new(size: Size) -> Result<Self, InvalidSize> {
+    pub fn new(size: Size) -> Result<Self, TerminalError> {
         Self::new_with_open_request_nonce(size, None)
     }
 
@@ -337,12 +462,18 @@ impl Terminal {
     pub fn new_with_open_request_nonce(
         size: Size,
         expected_open_nonce: Option<[u8; 16]>,
-    ) -> Result<Self, InvalidSize> {
+    ) -> Result<Self, TerminalError> {
+        Self::new_with_open_request_nonce_and_epoch(size, expected_open_nonce, SessionEpoch(0))
+    }
+
+    /// Construct a terminal-local status owner for one worker session epoch.
+    pub fn new_with_open_request_nonce_and_epoch(
+        size: Size,
+        expected_open_nonce: Option<[u8; 16]>,
+        session_epoch: SessionEpoch,
+    ) -> Result<Self, TerminalError> {
         let size = size.validate()?;
-        let metadata = Metadata {
-            expected_open_nonce,
-            ..Metadata::default()
-        };
+        let metadata = Metadata::try_new(expected_open_nonce, session_epoch)?;
         Ok(Self {
             parser: vt100::Parser::new_with_callbacks(
                 size.rows,
@@ -383,6 +514,15 @@ impl Terminal {
             };
         }
         self.parser.process(bytes);
+        let metadata = self.parser.callbacks();
+        if metadata.reply_overflowed {
+            self.failed = true;
+            return Err(TerminalError::CausalReplyOverflow);
+        }
+        if metadata.program_status_failed {
+            self.failed = true;
+            return Err(TerminalError::ProgramStatusLifecycle);
+        }
         self.measure_history();
         self.advance_viewport_generation()?;
         Ok(())
@@ -408,6 +548,59 @@ impl Terminal {
             return Err(ProgramOpenRequestError::QueueOverflow);
         }
         Ok(metadata.open_requests.drain(..).collect())
+    }
+
+    pub(crate) fn take_replies(&mut self) -> Result<Vec<u8>, TerminalError> {
+        let metadata = self.parser.callbacks_mut();
+        if metadata.reply_overflowed {
+            return Err(TerminalError::CausalReplyOverflow);
+        }
+        let mut replies = Vec::new();
+        replies
+            .try_reserve_exact(metadata.reply_length)
+            .map_err(|_| TerminalError::ProgramStatusAllocation)?;
+        replies.extend_from_slice(&metadata.replies[..metadata.reply_length]);
+        metadata.reply_length = 0;
+        Ok(replies)
+    }
+
+    pub(crate) fn attached_child_exited(&mut self) -> Result<(), TerminalError> {
+        if self.failed {
+            return Err(TerminalError::Failed);
+        }
+        if self
+            .parser
+            .callbacks_mut()
+            .program_status
+            .attached_child_exited()
+            .is_err()
+        {
+            self.failed = true;
+            return Err(TerminalError::ProgramStatusLifecycle);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn terminal_closed_status_snapshot(
+        &mut self,
+    ) -> Result<ProgramStatusSnapshot, TerminalError> {
+        if self.failed {
+            return Err(TerminalError::Failed);
+        }
+        let callbacks = self.parser.callbacks_mut();
+        let before_close = callbacks
+            .program_status
+            .snapshot(None)
+            .map_err(|_| TerminalError::ProgramStatusSnapshot)?
+            .cursor;
+        callbacks
+            .program_status
+            .terminal_closed()
+            .map_err(|_| TerminalError::ProgramStatusLifecycle)?;
+        callbacks
+            .program_status
+            .snapshot(Some(before_close))
+            .map_err(|_| TerminalError::ProgramStatusSnapshot)
     }
 
     pub fn resize(&mut self, size: Size) -> Result<(), TerminalError> {
@@ -658,9 +851,20 @@ impl Terminal {
 
     /// Only the visible screen crosses the bridge, never a clone of complete scrollback.
     pub fn viewport(&self) -> Viewport {
+        self.try_viewport()
+            .expect("program-status snapshot allocation failed")
+    }
+
+    pub fn try_viewport(&self) -> Result<Viewport, TerminalError> {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
         let (lines, row_copy) = self.runs();
-        Viewport {
+        let program_status = self
+            .parser
+            .callbacks()
+            .program_status
+            .snapshot(None)
+            .map_err(|_| TerminalError::ProgramStatusSnapshot)?;
+        Ok(Viewport {
             viewport_generation: self.viewport_generation,
             links: self.links(),
             notices: self.parser.callbacks().notices.clone(),
@@ -685,7 +889,8 @@ impl Terminal {
             scrollback_offset: self.parser.screen().scrollback(),
             scrollback_lines: self.scrollback_lines,
             alternate_screen: self.parser.screen().alternate_screen(),
-        }
+            program_status,
+        })
     }
 }
 

@@ -1,6 +1,7 @@
 //! Independent consumer of the native delta wire contract through the real ABI.
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     sync::Mutex,
     thread,
     time::{Duration, Instant},
@@ -35,18 +36,159 @@ fn poll(id: u64, revision: u64) -> Option<Value> {
     assert_eq!(result.status, 0);
     Some(take(result.value))
 }
-fn wait(id: u64, revision: u64, predicate: impl Fn(&Value) -> bool) -> Value {
-    let end = Instant::now() + Duration::from_secs(8);
-    loop {
-        if let Some(value) = poll(id, revision)
-            && predicate(&value)
-        {
-            return value;
+fn snapshot(id: u64) -> Option<Value> {
+    let result = zmux_desktop_snapshot(id, u64::MAX);
+    if result.status == -4 || (result.status == 0 && result.value == 0) {
+        return None;
+    }
+    assert_eq!(result.status, 0);
+    Some(take(result.value))
+}
+fn frame_diagnostic(value: Option<&Value>) -> String {
+    let Some(value) = value else {
+        return "no snapshot received".to_string();
+    };
+    let delta = value["frame_packets"].is_array();
+    let packets = value[if delta { "frame_packets" } else { "frames" }]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let frames = packets
+        .iter()
+        .take(4)
+        .map(|packet| {
+            let frame = if delta { &packet["frame"] } else { packet };
+            let viewport = &frame["snapshot"]["viewport"];
+            let contents: String = viewport["contents"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(48)
+                .collect();
+            format!(
+                "{{session:{},state:{},generation:{},contents:{:?}}}",
+                frame["session_id"],
+                frame["snapshot"]["state"],
+                viewport["viewport_generation"],
+                contents
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let omitted = packets.len().saturating_sub(4);
+    let revision = if delta {
+        &value["snapshot"]["revision"]
+    } else {
+        &value["revision"]
+    };
+    let base_revision = if delta {
+        value["base_revision"].to_string()
+    } else {
+        "n/a".to_string()
+    };
+    format!(
+        "revision={}, base_revision={}, {}={} [{}]{}",
+        revision,
+        base_revision,
+        if delta { "frame_packets" } else { "frames" },
+        packets.len(),
+        frames,
+        if omitted > 0 {
+            format!(", {omitted} more")
+        } else {
+            String::new()
         }
-        assert!(Instant::now() < end, "native frame contract did not settle");
+    )
+}
+
+fn wait_snapshot(
+    id: u64,
+    end: Instant,
+    stage: &'static str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let mut last = None;
+    loop {
+        if let Some(value) = snapshot(id) {
+            if predicate(&value) {
+                return value;
+            }
+            last = Some(value);
+        }
+        assert!(
+            Instant::now() < end,
+            "native snapshot contract did not settle at {stage}; last state: {}",
+            frame_diagnostic(last.as_ref())
+        );
         thread::sleep(Duration::from_millis(5));
     }
 }
+
+fn wait(id: u64, revision: u64, stage: &'static str, predicate: impl Fn(&Value) -> bool) -> Value {
+    wait_until(
+        id,
+        revision,
+        Instant::now() + Duration::from_secs(8),
+        stage,
+        predicate,
+    )
+}
+
+fn wait_until(
+    id: u64,
+    revision: u64,
+    end: Instant,
+    stage: &'static str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let mut last = None;
+    let mut recent = VecDeque::new();
+    loop {
+        if let Some(value) = poll(id, revision) {
+            if predicate(&value) {
+                return value;
+            }
+            let observed_revision = value["snapshot"]["revision"].as_u64();
+            if recent
+                .back()
+                .is_none_or(|(previous, _)| Some(*previous) != observed_revision)
+            {
+                recent.push_back((
+                    observed_revision.unwrap_or_default(),
+                    frame_diagnostic(Some(&value)),
+                ));
+                if recent.len() > 6 {
+                    recent.pop_front();
+                }
+            }
+            last = Some(value);
+        }
+        assert!(
+            Instant::now() < end,
+            "native frame contract did not settle at {stage} from revision {revision}; recent states: [{}]; last state: {}",
+            recent
+                .iter()
+                .map(|(revision, state)| format!("{revision}: {state}"))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            frame_diagnostic(last.as_ref()),
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_delta_after_snapshot(
+    id: u64,
+    revision: u64,
+    snapshot_stage: &'static str,
+    delta_stage: &'static str,
+    snapshot_predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let end = Instant::now() + Duration::from_secs(8);
+    wait_snapshot(id, end, snapshot_stage, snapshot_predicate);
+    wait_until(id, revision, end, delta_stage, |_| true)
+}
+
 fn command(id: u64, number: u64, payload: Value) {
     let data =
         serde_json::to_vec(&json!({"version":1,"request_id":number,"payload":payload})).unwrap();
@@ -70,7 +212,7 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
     let created = zmux_desktop_create();
     assert_eq!(created.status, 0);
     let desktop = Desktop(created.value);
-    let first = wait(desktop.0, u64::MAX, |v| {
+    let first = wait(desktop.0, u64::MAX, "initial session running", |v| {
         v["frame_packets"]
             .as_array()
             .is_some_and(|f| f.len() == 1 && f[0]["frame"]["snapshot"]["state"] == "running")
@@ -81,7 +223,7 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
         1,
         json!({"command":"action","action":{"action":"split_pane","pane_id":pane,"axis":"horizontal"}}),
     );
-    let split = wait(desktop.0, u64::MAX, |v| {
+    let split = wait(desktop.0, u64::MAX, "split session running frames", |v| {
         v["frame_packets"].as_array().is_some_and(|f| {
             f.len() == 2
                 && f.iter()
@@ -105,14 +247,19 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
         3,
         json!({"command":"input","session_id":ids[1],"text":"stty -echo; printf '\\033[2J\\033[HOTHER_READY'; IFS= read -r hold\n"}),
     );
-    let baseline = wait(desktop.0, u64::MAX, |v| {
-        packet(v, ids[0])["frame"]["snapshot"]["viewport"]["contents"]
-            .as_str()
-            .is_some_and(|s| s.starts_with("λ🙂BASE"))
-            && packet(v, ids[1])["frame"]["snapshot"]["viewport"]["contents"]
+    let baseline = wait(
+        desktop.0,
+        u64::MAX,
+        "initial Unicode and other-pane output",
+        |v| {
+            packet(v, ids[0])["frame"]["snapshot"]["viewport"]["contents"]
                 .as_str()
-                .is_some_and(|s| s.starts_with("OTHER_READY"))
-    });
+                .is_some_and(|s| s.starts_with("λ🙂BASE"))
+                && packet(v, ids[1])["frame"]["snapshot"]["viewport"]["contents"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("OTHER_READY"))
+        },
+    );
     assert_eq!(baseline["schema_version"], 1);
     assert!(baseline["base_revision"].is_null());
     assert_eq!(baseline["snapshot"]["frames"], json!([]));
@@ -122,11 +269,22 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
         4,
         json!({"command":"input","session_id":ids[0],"text":"go\n"}),
     );
-    let delta = wait(desktop.0, revision, |v| {
-        packet(v, ids[0])["changed_rows"]
-            .as_array()
-            .is_some_and(|r| !r.is_empty())
-    });
+    let delta = wait_delta_after_snapshot(
+        desktop.0,
+        revision,
+        "terminal output before row delta",
+        "row patch after input",
+        |v| {
+            v["frames"].as_array().is_some_and(|frames| {
+                frames.iter().any(|frame| {
+                    frame["session_id"] == ids[0]
+                        && frame["snapshot"]["viewport"]["contents"]
+                            .as_str()
+                            .is_some_and(|contents| contents.starts_with("μ🙂NEXT"))
+                })
+            })
+        },
+    );
     assert_eq!(delta["base_revision"], revision);
     let stable = packet(&delta, ids[1]);
     assert_eq!(stable["unchanged"], true);
@@ -158,7 +316,7 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
     contents.replace_range(start..end, patch["contents"].as_str().unwrap());
     assert!(contents.starts_with("μ🙂NEXT"), "{contents}");
     // A consumer with an expired/unknown revision gets a full coherent baseline.
-    let reset = wait(desktop.0, u64::MAX, |_| true);
+    let reset = wait(desktop.0, u64::MAX, "unknown baseline recovery", |_| true);
     assert!(reset["base_revision"].is_null());
     let reset_frame = packet(&reset, ids[0]);
     assert_eq!(reset_frame["unchanged"], false);
@@ -188,7 +346,7 @@ fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_cl
     let created = zmux_desktop_create();
     assert_eq!(created.status, 0);
     let desktop = Desktop(created.value);
-    let first = wait(desktop.0, u64::MAX, |v| {
+    let first = wait(desktop.0, u64::MAX, "initial session running", |v| {
         v["frame_packets"]
             .as_array()
             .is_some_and(|f| f.len() == 1 && f[0]["frame"]["snapshot"]["state"] == "running")
@@ -217,7 +375,7 @@ fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_cl
         }),
     );
 
-    let linked = wait(desktop.0, u64::MAX, |v| {
+    let linked = wait(desktop.0, u64::MAX, "initial linked viewport", |v| {
         packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
             .as_str()
             .is_some_and(|contents| contents.contains("NATIVE_LINKS_READY"))
@@ -241,11 +399,22 @@ fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_cl
         2,
         json!({"command":"resize","session_id":session,"rows":rows,"cols":cols}),
     );
-    let resized = wait(desktop.0, revision, |v| {
-        packet(v, session)["frame"]["snapshot"]["viewport"]["viewport_generation"]
-            .as_u64()
-            .is_some_and(|generation| generation > initial_generation)
-    });
+    let resized = wait_delta_after_snapshot(
+        desktop.0,
+        revision,
+        "resized full snapshot",
+        "resize publication",
+        |v| {
+            v["frames"].as_array().is_some_and(|frames| {
+                frames.iter().any(|frame| {
+                    frame["session_id"] == session
+                        && frame["snapshot"]["viewport"]["viewport_generation"]
+                            .as_u64()
+                            .is_some_and(|generation| generation > initial_generation)
+                })
+            })
+        },
+    );
     assert_eq!(resized["base_revision"], revision);
     let resized_packet = packet(&resized, session);
     assert_eq!(resized_packet["changed_rows"], json!([]));
@@ -259,13 +428,20 @@ fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_cl
         3,
         json!({"command":"input","session_id":session,"text":"replace\n"}),
     );
-    let replaced = wait(
+    let replaced = wait_delta_after_snapshot(
         desktop.0,
         resized["snapshot"]["revision"].as_u64().unwrap(),
+        "replacement full snapshot",
+        "replacement output",
         |v| {
-            packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
-                .as_str()
-                .is_some_and(|contents| contents.contains("NATIVE_LINKS_REPLACED"))
+            v["frames"].as_array().is_some_and(|frames| {
+                frames.iter().any(|frame| {
+                    frame["session_id"] == session
+                        && frame["snapshot"]["viewport"]["contents"]
+                            .as_str()
+                            .is_some_and(|contents| contents.contains("NATIVE_LINKS_REPLACED"))
+                })
+            })
         },
     );
     let replaced_viewport = &packet(&replaced, session)["frame"]["snapshot"]["viewport"];
@@ -282,13 +458,20 @@ fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_cl
         4,
         json!({"command":"input","session_id":session,"text":"clear\n"}),
     );
-    let cleared = wait(
+    let cleared = wait_delta_after_snapshot(
         desktop.0,
         replaced["snapshot"]["revision"].as_u64().unwrap(),
+        "cleared full snapshot",
+        "cleared viewport output",
         |v| {
-            packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
-                .as_str()
-                .is_some_and(|contents| contents.contains("NATIVE_LINKS_CLEARED"))
+            v["frames"].as_array().is_some_and(|frames| {
+                frames.iter().any(|frame| {
+                    frame["session_id"] == session
+                        && frame["snapshot"]["viewport"]["contents"]
+                            .as_str()
+                            .is_some_and(|contents| contents.contains("NATIVE_LINKS_CLEARED"))
+                })
+            })
         },
     );
     let cleared_viewport = &packet(&cleared, session)["frame"]["snapshot"]["viewport"];

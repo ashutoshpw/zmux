@@ -5,6 +5,7 @@ import Foundation
 enum NotificationPermissionSmoke {
     static func validate() async throws {
         try await AgentAlertSmoke.validate()
+        try ProgramAlertSmoke.validate()
         let bridge = NativeBridge()
         try await bridge.start(storage: .transient)
         do {

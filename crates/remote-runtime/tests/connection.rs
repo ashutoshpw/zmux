@@ -351,13 +351,17 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .expect("managed lifecycle stream handshake");
     let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
     assert_eq!(hello["kind"], "hello");
-    assert_eq!(hello["version"], 3);
+    assert_eq!(
+        hello["version"],
+        zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION
+    );
     assert_eq!(hello["nonce"], nonce.remote_lifecycle_token());
     let generation = uuid::Uuid::new_v4();
     let mut stream_stdin = stream_child.stdin.take().unwrap();
     writeln!(
         stream_stdin,
-        "{{\"kind\":\"activate\",\"version\":3,\"nonce\":\"{}\",\"generation\":\"{}\"}}",
+        "{{\"kind\":\"activate\",\"version\":{},\"nonce\":\"{}\",\"generation\":\"{}\"}}",
+        zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
         nonce.remote_lifecycle_token(),
         generation
     )
@@ -367,7 +371,10 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .expect("managed lifecycle stream activation");
     let active: serde_json::Value = serde_json::from_str(&active).unwrap();
     assert_eq!(active["kind"], "active");
-    assert_eq!(active["version"], 3);
+    assert_eq!(
+        active["version"],
+        zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION
+    );
     assert_eq!(active["nonce"], nonce.remote_lifecycle_token());
     assert_eq!(active["generation"], generation.to_string());
     let remote_notice = || {
@@ -822,7 +829,10 @@ fn required_remote_receipt_failures_emit_a_generation_gap() {
         stream.write_events(&[event_id], deadline_seconds);
         let gap = stream.read_until_gap();
         assert_eq!(gap["kind"], "gap");
-        assert_eq!(gap["version"], 3);
+        assert_eq!(
+            gap["version"],
+            zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION
+        );
         assert_eq!(gap["nonce"], stream.nonce_token);
         assert_eq!(gap["generation"], stream.generation.to_string());
         assert!(gap["sequence"].as_u64().unwrap() > 0);
@@ -1019,7 +1029,7 @@ impl LocalLifecycleStream {
             "{}",
             serde_json::to_string(
                 &zmux_remote_runtime::agent_lifecycle::ClientFrame::Activate {
-                    version: 3,
+                    version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
                     nonce: stream.nonce_token.parse().unwrap(),
                     generation: stream.generation,
                 }

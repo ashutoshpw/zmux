@@ -10,6 +10,9 @@ links = "zmux_ghostty_vt"
 [features]
 linked = []
 
+[dependencies]
+zmux-program-status.workspace = true
+
 [build-dependencies]
 serde_json.workspace = true
 

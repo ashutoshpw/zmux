@@ -229,6 +229,12 @@ pub struct Notification {
     pub agent_alert_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_alert_event_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_sound_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_sound_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_sound_event_key: Option<String>,
     pub timestamp_ms: u64,
     pub read: bool,
     /// Rows lacking a captured owner are never eligible for native effects.
@@ -247,6 +253,10 @@ pub struct NativeNotificationRequest {
     pub reply_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_alert_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_sound_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_sound_kind: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct NativeNotificationSnapshot {
@@ -547,6 +557,16 @@ struct AgentAlertMetadata {
     kind: String,
     event_key: String,
 }
+struct AlertSoundMetadata {
+    source: String,
+    kind: String,
+    event_key: String,
+}
+#[derive(Default)]
+struct NotificationMetadata {
+    agent_alert: Option<AgentAlertMetadata>,
+    alert_sound: Option<AlertSoundMetadata>,
+}
 impl Default for Attention {
     fn default() -> Self {
         Self {
@@ -698,7 +718,14 @@ impl Attention {
         {
             return Err(AttentionError::ReplyNotAllowed);
         }
-        self.insert(workspace_id, source, content, read, target, None)
+        self.insert(
+            workspace_id,
+            source,
+            content,
+            read,
+            target,
+            NotificationMetadata::default(),
+        )
     }
 
     /// Admit one Rust-owned visual/inbox item for a lifecycle event already
@@ -758,13 +785,86 @@ impl Attention {
             content,
             false,
             target,
-            Some(AgentAlertMetadata {
-                kind: kind.to_string(),
-                event_key: event_key.to_string(),
-            }),
+            NotificationMetadata {
+                agent_alert: Some(AgentAlertMetadata {
+                    kind: kind.to_string(),
+                    event_key: event_key.to_string(),
+                }),
+                alert_sound: Some(AlertSoundMetadata {
+                    source: "agent_lifecycle".into(),
+                    kind: kind.to_string(),
+                    event_key: event_key.to_string(),
+                }),
+            },
         )?;
         let _ = surface;
         Ok(id)
+    }
+    /// Admit one Rust-owned notification for an OSC status alert that passed
+    /// terminal-local source arbitration. OSC sound tags suppress the OS default.
+    pub fn notify_program_status_event(
+        &mut self,
+        model: &Snapshot,
+        surface_id: SurfaceId,
+        session_id: SessionId,
+        kind: &str,
+        event_key: &str,
+        content: &NotificationContent,
+    ) -> Result<u64, AttentionError> {
+        if event_key.is_empty()
+            || event_key.len() > 128
+            || !matches!(kind, "needs_user" | "completed")
+        {
+            return Err(AttentionError::InvalidOwner);
+        }
+        if let Some(existing) = self
+            .items
+            .iter()
+            .find(|item| item.alert_sound_event_key.as_deref() == Some(event_key))
+        {
+            return Ok(existing.id);
+        }
+        let (workspace_id, _) = model
+            .workspaces
+            .iter()
+            .find_map(|workspace| {
+                workspace
+                    .root
+                    .panes()
+                    .into_iter()
+                    .flat_map(|pane| &pane.surfaces)
+                    .find(|surface| {
+                        surface.id == surface_id
+                            && surface.session_id == Some(session_id)
+                            && surface.kind == zmux_workspace_core::SurfaceKind::Terminal
+                    })
+                    .map(|surface| (workspace.id, surface))
+            })
+            .ok_or(AttentionError::InvalidOwner)?;
+        let target = NotificationTarget {
+            epoch: self.epoch,
+            identity_namespace: model.identity_namespace,
+            notification_id: 0,
+            destination: NotificationDestination::Surface {
+                surface_id,
+                session_id: Some(session_id),
+            },
+        };
+        self.insert(
+            workspace_id,
+            "program",
+            content,
+            false,
+            target,
+            NotificationMetadata {
+                agent_alert: None,
+                alert_sound: Some(AlertSoundMetadata {
+                    source: "osc7501".into(),
+                    kind: kind.to_string(),
+                    event_key: event_key.to_string(),
+                }),
+            },
+        )
     }
     fn insert(
         &mut self,
@@ -773,11 +873,18 @@ impl Attention {
         content: &NotificationContent,
         read: bool,
         mut target: NotificationTarget,
-        agent_alert: Option<AgentAlertMetadata>,
+        metadata: NotificationMetadata,
     ) -> Result<u64, AttentionError> {
+        let NotificationMetadata {
+            agent_alert,
+            alert_sound,
+        } = metadata;
         let (agent_alert_kind, agent_alert_event_key) = agent_alert
             .map(|alert| (Some(alert.kind), Some(alert.event_key)))
             .unwrap_or((None, None));
+        let (alert_sound_source, alert_sound_kind, alert_sound_event_key) = alert_sound
+            .map(|sound| (Some(sound.source), Some(sound.kind), Some(sound.event_key)))
+            .unwrap_or((None, None, None));
         let title = clean(&content.title, MAX_NOTIFICATION_TITLE_CHARS);
         let subtitle = clean(&content.subtitle, MAX_NOTIFICATION_TITLE_CHARS);
         let body = clean(&content.body, MAX_NOTIFICATION_BODY_CHARS);
@@ -806,6 +913,9 @@ impl Attention {
                 && last.reply_enabled == content.reply
                 && last.agent_alert_kind == agent_alert_kind
                 && last.agent_alert_event_key == agent_alert_event_key
+                && last.alert_sound_source == alert_sound_source
+                && last.alert_sound_kind == alert_sound_kind
+                && last.alert_sound_event_key == alert_sound_event_key
                 && matches!(
                     last.reply_state,
                     NotificationReplyState::Disabled | NotificationReplyState::Ready
@@ -855,6 +965,9 @@ impl Attention {
             source,
             agent_alert_kind,
             agent_alert_event_key,
+            alert_sound_source,
+            alert_sound_kind,
+            alert_sound_event_key,
             timestamp_ms,
             read,
             target: Some(target),
@@ -993,6 +1106,8 @@ impl Attention {
                         body: item.body.clone(),
                         reply_enabled: item.reply_enabled,
                         agent_alert_kind: item.agent_alert_kind.clone(),
+                        alert_sound_source: item.alert_sound_source.clone(),
+                        alert_sound_kind: item.alert_sound_kind.clone(),
                     })
                 })
                 .collect(),

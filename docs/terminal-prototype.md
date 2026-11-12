@@ -34,6 +34,11 @@ and reaps its leader. A daemonized descendant that creates a separate process gr
 outside this guarantee. If the leader exits while inherited slave descriptors remain,
 output draining fails visibly after two seconds rather than waiting forever. Native lifecycle and recovery behavior is tracked separately from this prototype command.
 
+The command emits a final screen and process status as JSON; it does not expose the
+native Programs sidebar or establish a packaged OSC 7501 feature. See the
+[OSC 7501 program status guide](program-status.md) for its source integration and
+transport limits.
+
 ## Verification boundaries
 
 Portable integration tests exercise real PTYs, input/resize, output floods, queue

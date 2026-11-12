@@ -125,6 +125,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
     private let workspaceList = WorkspaceSidebarList(frame: .zero)
     private let agentSidebarList = AgentSidebarList(frame: .zero)
+    private let programSidebarList = ProgramSidebarList(frame: .zero)
     private let mainHeader = MainHeaderView()
     private lazy var cancelUploadButton = IconButton(symbol: "xmark.circle", label: "Cancel active upload", target: self, action: #selector(cancelActiveUpload))
     private var statusMessage = "Starting shell…"
@@ -164,6 +165,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             return self.coordinator.enqueue(.workspaceOrder(target.workspace, target.window, index, target.revision))
         }
         agentSidebarList.onSelect = { [weak self] target in self?.selectAgentTarget(target) }
+        programSidebarList.onSelect = { [weak self] target in self?.selectProgramTarget(target) }
         window.delegate = self
         window.onWorkspaceNumber = { [weak self] digit in self?.selectWorkspaceNumber(digit) }
         window.onTabNavigation = { [weak self] previous in
@@ -343,6 +345,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
         let spacesHeader = SidebarSectionHeaderView(title: "Spaces", trailingView: newWorkspaceButton)
         let agentsHeader = SidebarSectionHeaderView(title: "Agents")
+        let programsHeader = SidebarSectionHeaderView(title: "Programs")
         let agentScroll = NSScrollView()
         agentScroll.drawsBackground = false
         agentScroll.borderType = .noBorder
@@ -352,6 +355,16 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         agentScroll.documentView = agentSidebarList
         agentSidebarList.translatesAutoresizingMaskIntoConstraints = false
         agentSidebarList.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 10, right: 8)
+
+        let programScroll = NSScrollView()
+        programScroll.drawsBackground = false
+        programScroll.borderType = .noBorder
+        programScroll.hasVerticalScroller = true
+        programScroll.hasHorizontalScroller = false
+        programScroll.autohidesScrollers = true
+        programScroll.documentView = programSidebarList
+        programSidebarList.translatesAutoresizingMaskIntoConstraints = false
+        programSidebarList.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 10, right: 8)
 
         let inboxScroll = NSScrollView()
         notificationScroll = inboxScroll
@@ -372,7 +385,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
 
         for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, sidebarActions,
-                     sidebarSections, spacesHeader, scroll, agentsHeader, agentScroll, inboxScroll,
+                     sidebarSections, spacesHeader, scroll, agentsHeader, agentScroll, programsHeader, programScroll, inboxScroll,
                      cloudFooter, mainHeader, canvas, sidebarDivider] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -386,6 +399,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         sidebarSections.addSubview(scroll)
         sidebarSections.addSubview(agentsHeader)
         sidebarSections.addSubview(agentScroll)
+        sidebarSections.addSubview(programsHeader)
+        sidebarSections.addSubview(programScroll)
         sidebarPanel.addSubview(inboxScroll)
         sidebarPanel.addSubview(cloudFooter)
         sidebarPanel.addSubview(rightSeparator)
@@ -453,8 +468,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             agentScroll.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
             agentScroll.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
             agentScroll.topAnchor.constraint(equalTo: agentsHeader.bottomAnchor),
-            agentScroll.bottomAnchor.constraint(equalTo: sidebarSections.bottomAnchor),
+            agentScroll.bottomAnchor.constraint(equalTo: programsHeader.topAnchor),
             agentScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
+            programsHeader.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            programsHeader.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            programScroll.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            programScroll.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            programScroll.topAnchor.constraint(equalTo: programsHeader.bottomAnchor),
+            programScroll.bottomAnchor.constraint(equalTo: sidebarSections.bottomAnchor),
+            programScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
             inboxScroll.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             inboxScroll.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
             inboxScroll.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 4),
@@ -481,11 +503,17 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         NSLayoutConstraint.activate([
             agentSidebarList.leadingAnchor.constraint(equalTo: agentScroll.contentView.leadingAnchor),
             agentSidebarList.topAnchor.constraint(equalTo: agentScroll.contentView.topAnchor),
-            agentSidebarList.widthAnchor.constraint(equalTo: agentScroll.contentView.widthAnchor)
+            agentSidebarList.widthAnchor.constraint(equalTo: agentScroll.contentView.widthAnchor),
+            programSidebarList.leadingAnchor.constraint(equalTo: programScroll.contentView.leadingAnchor),
+            programSidebarList.topAnchor.constraint(equalTo: programScroll.contentView.topAnchor),
+            programSidebarList.widthAnchor.constraint(equalTo: programScroll.contentView.widthAnchor)
         ])
-        let proportionalAgentHeight = agentScroll.heightAnchor.constraint(equalTo: sidebarSections.heightAnchor, multiplier: 0.55)
+        let proportionalAgentHeight = agentScroll.heightAnchor.constraint(equalTo: sidebarSections.heightAnchor, multiplier: 0.28)
         proportionalAgentHeight.priority = .defaultLow
         proportionalAgentHeight.isActive = true
+        let proportionalProgramHeight = programScroll.heightAnchor.constraint(equalTo: sidebarSections.heightAnchor, multiplier: 0.28)
+        proportionalProgramHeight.priority = .defaultLow
+        proportionalProgramHeight.isActive = true
         sidebarPanelWidth = sidebarPanel.widthAnchor.constraint(equalToConstant: 224)
         sidebarPanelWidth?.isActive = true
         sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: 0)
@@ -771,6 +799,65 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "surface_uuid": surfaceUUID.uuidString.lowercased(),
             "session_id": targetSession
         ]
+
+        // Emit literal OSC 7501 through the selected shell's real PTY. The
+        // shell's printf writes the escape sequence to its stdout, where the
+        // production VT parser owns decoding and session attribution. Keep the
+        // command open so its working report survives prompt-boundary retirement
+        // until the isolated app shuts the fixture PTY down. `read` is a
+        // shell builtin, so the smoke does not leave a long-lived child process.
+        let programCommand = "printf '\\033]7501;state=idle:app=make:title=Um9vdA==\\033\\\\'; printf '\\033]7501;state=working:id=build/test:app=rustc:progress=70:title=VGVzdHM=\\033\\\\'; read -r zmux_program_smoke_hold\r"
+        try await bridge.input(session: targetSession, text: programCommand)
+        try await waitUntil { value in
+            value.programStatus?.contains(where: { terminal in
+                terminal.source == .osc7501
+                    && terminal.identityNamespace == fixtureSnapshot.model.identityNamespace
+                    && terminal.windowId == windowID && terminal.windowUuid == windowUUID
+                    && terminal.workspaceId == workspaceID && terminal.workspaceUuid == workspaceUUID
+                    && terminal.paneId == paneID && terminal.paneUuid == paneUUID
+                    && terminal.surfaceId == targetSurface.id && terminal.surfaceUuid == surfaceUUID
+                    && terminal.sessionId == targetSession
+                    && terminal.records.count == 2
+                    && terminal.recordsComplete
+            }) == true
+        }
+        guard let initialProgramTerminal = snapshot?.programStatus?.first(where: {
+            $0.identityNamespace == fixtureSnapshot.model.identityNamespace
+                && $0.windowId == windowID && $0.windowUuid == windowUUID
+                && $0.workspaceId == workspaceID && $0.workspaceUuid == workspaceUUID
+                && $0.paneId == paneID && $0.paneUuid == paneUUID
+                && $0.surfaceId == targetSurface.id && $0.surfaceUuid == surfaceUUID
+                && $0.sessionId == targetSession
+        }), initialProgramTerminal.availability == .available,
+              initialProgramTerminal.recordsComplete, initialProgramTerminal.recordCount == 2,
+              let rootProgram = initialProgramTerminal.records.first(where: { $0.id.isEmpty }),
+              rootProgram.state == .idle, rootProgram.title == "Root",
+              let childProgram = initialProgramTerminal.records.first(where: { $0.id == "build/test" }),
+              childProgram.state == .working, childProgram.progress == 70, childProgram.title == "Tests" else {
+            throw BridgeFailure(message: "Literal OSC 7501 PTY reports did not preserve the complete exact-owner record set")
+        }
+        guard let programSummary = programSidebarList.arrangedSubviews.first(where: {
+            ($0.accessibilityLabel() ?? "").contains("Tests")
+                && ($0.accessibilityLabel() ?? "").contains("build/test")
+                && ($0.accessibilityValue() as? String) == "Working · 70%"
+        }),
+              let programDisclosure = descendants(programSummary).compactMap({ $0 as? NSButton }).first(where: {
+                  ($0.accessibilityLabel() ?? "").hasPrefix("Expand program records")
+              }) else {
+            throw BridgeFailure(message: "Programs sidebar omitted its focused priority summary or record disclosure")
+        }
+        programDisclosure.performClick(nil)
+        content.layoutSubtreeIfNeeded()
+        guard programSidebarList.arrangedSubviews.contains(where: {
+            ($0.accessibilityLabel() ?? "").contains("Root program")
+                && ($0.accessibilityValue() as? String) == "Idle"
+        }), programSidebarList.arrangedSubviews.contains(where: {
+            ($0.accessibilityLabel() ?? "").contains("build/test")
+                && ($0.accessibilityValue() as? String) == "Working · 70%"
+        }) else {
+            throw BridgeFailure(message: "Expanded Programs sidebar did not reveal the focused terminal's full record list")
+        }
+
         let expectedOwners = ["claude_local", "codex_local", "opencode_local"].map { provider -> [String: Any] in
             var owner = ownerIdentity
             owner["provider"] = provider
@@ -1032,6 +1119,147 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 "complete_inventory_unchanged": true
             ])
         }
+
+        guard let programSnapshot = snapshot,
+              let programTerminal = programSnapshot.programStatus?.first(where: {
+                  $0.identityNamespace == fixtureSnapshot.model.identityNamespace
+                      && $0.windowId == windowID && $0.windowUuid == windowUUID
+                      && $0.workspaceId == workspaceID && $0.workspaceUuid == workspaceUUID
+                      && $0.paneId == paneID && $0.paneUuid == paneUUID
+                      && $0.surfaceId == targetSurface.id && $0.surfaceUuid == surfaceUUID
+                      && $0.sessionId == targetSession
+              }),
+              programTerminal.recordsComplete, programTerminal.recordCount == 2,
+              let programRecord = programTerminal.records.first(where: { $0.id == "build/test" }),
+              programSnapshot.programStatusAlerts != nil,
+              programSnapshot.agentLifecycle?.count == 3 else {
+            throw BridgeFailure(message: "OSC 7501 status, admitted alert feed, and provider lifecycle records did not coexist for one exact terminal")
+        }
+        guard let beforeProgramSelection = snapshot else {
+            throw BridgeFailure(message: "Program selection fixture lost its current snapshot")
+        }
+        let programInventoryBefore = try await surfacePTYInventory(beforeProgramSelection)
+        guard programInventoryBefore.surfaces == selectionInventory.surfaces,
+              programInventoryBefore.processIDs == selectionInventory.processIDs else {
+            throw BridgeFailure(message: "Provider lifecycle changes altered the complete terminal inventory before OSC selection")
+        }
+
+        guard let otherWorkspaceRow = workspaceRows.first(where: { $0.value == otherWorkspaceID })?.key,
+              otherWorkspaceRow.workspaceID == otherWorkspaceID,
+              workspaceRows[otherWorkspaceRow] == otherWorkspaceID,
+              otherWorkspaceRow.window === window,
+              workspaceList.arrangedSubviews.contains(where: { $0 === otherWorkspaceRow }),
+              let programScroll = programSidebarList.enclosingScrollView,
+              programScroll.documentView === programSidebarList else {
+            throw BridgeFailure(message: "Program selection fixture lacks its other workspace or independent Programs viewport")
+        }
+        let workspaceOriginBeforeProgramReveal = workspaceScroll.contentView.bounds.origin
+        otherWorkspaceRow.scrollToVisible(otherWorkspaceRow.bounds)
+        content.layoutSubtreeIfNeeded()
+        guard !otherWorkspaceRow.isHiddenOrHasHiddenAncestor,
+              otherWorkspaceRow.visibleRect.width >= otherWorkspaceRow.bounds.width - 1,
+              otherWorkspaceRow.visibleRect.height >= otherWorkspaceRow.bounds.height - 1 else {
+            throw BridgeFailure(message: "Other workspace row was not visible before OSC selection")
+        }
+        try click(otherWorkspaceRow)
+        try await waitUntil { $0.model.focusedWindow == windowID && $0.model.focusedWorkspace == otherWorkspaceID }
+        guard let nonfocusedTerminal = snapshot?.programStatus?.first(where: { $0.identity == programTerminal.identity }),
+              !nonfocusedTerminal.recordsComplete, nonfocusedTerminal.recordCount == 2,
+              nonfocusedTerminal.records.count == 1,
+              nonfocusedTerminal.records.first?.id == programRecord.id,
+              nonfocusedTerminal.records.first?.state == .working,
+              programSidebarList.arrangedSubviews.contains(where: {
+                  ($0.accessibilityValue() as? String)?.contains("1 of 2 shown") == true
+              }),
+              let nonfocusedProgramRow = programSidebarList.arrangedSubviews.first(where: {
+                  ($0.accessibilityLabel() ?? "").contains("build/test")
+                      && ($0.accessibilityValue() as? String) == "Working · 70%"
+              }) else {
+            throw BridgeFailure(message: "Nonfocused terminal did not retain its priority OSC summary while loading full details only on focus")
+        }
+        nonfocusedProgramRow.scrollToVisible(nonfocusedProgramRow.bounds)
+        content.layoutSubtreeIfNeeded()
+        guard !nonfocusedProgramRow.isHiddenOrHasHiddenAncestor,
+              nonfocusedProgramRow.visibleRect.width >= nonfocusedProgramRow.bounds.width - 1,
+              nonfocusedProgramRow.visibleRect.height >= nonfocusedProgramRow.bounds.height - 1,
+              workspaceScroll.contentView.bounds.origin == workspaceOriginBeforeProgramReveal else {
+            throw BridgeFailure(message: "Nonfocused OSC priority summary was not visible in the independent Programs viewport")
+        }
+        let programTarget = ProgramSelectionTarget(terminal: nonfocusedTerminal, record: programRecord)
+        try click(nonfocusedProgramRow, at: NSPoint(x: 3, y: nonfocusedProgramRow.bounds.midY))
+        func programSelectionMatches(_ target: ProgramSelectionTarget, in state: DesktopSnapshot) -> Bool {
+            guard state.programStatus?.contains(where: { target.matches($0) }) == true,
+                  state.model.focusedWindow == target.windowId,
+                  state.model.focusedWorkspace == target.workspaceId,
+                  let workspace = state.model.workspaces.first(where: { $0.id == target.workspaceId }),
+                  workspace.focusedPane == target.paneId,
+                  let pane = workspace.root.panes.first(where: { $0.id == target.paneId }),
+                  pane.selectedSurface == target.surfaceId,
+                  let surface = pane.surfaces.first(where: { $0.id == target.surfaceId }) else { return false }
+            return surface.kind == "terminal" && surface.sessionId == target.sessionId
+        }
+        try await waitUntil { programSelectionMatches(programTarget, in: $0) }
+        guard let afterProgramSelection = snapshot,
+              afterProgramSelection.model.focusedWorkspace == selected,
+              programSelectionMatches(programTarget, in: afterProgramSelection) else {
+            throw BridgeFailure(message: "OSC summary selection did not focus the exact existing program owner")
+        }
+        let programInventoryAfter = try await surfacePTYInventory(afterProgramSelection)
+        let changedProgramSurfaces = Set(programInventoryBefore.surfaces.keys).union(programInventoryAfter.surfaces.keys)
+            .filter { programInventoryBefore.surfaces[$0] != programInventoryAfter.surfaces[$0] }.sorted()
+        guard changedProgramSurfaces.isEmpty,
+              programInventoryBefore.surfaces == programInventoryAfter.surfaces,
+              programInventoryBefore.processIDs == programInventoryAfter.processIDs,
+              programInventoryAfter.processIDs[targetSurface.id] != nil else {
+            throw BridgeFailure(message: "OSC selection changed the complete surface/session/PTY inventory")
+        }
+        let programAcceptance: [String: Any] = [
+            "fixture_kind": "literal_osc_7501_shell_pty_reports",
+            "event_provenance": "literal shell printf output through the packaged app PTY and production VT parser",
+            "audio_effect": "idle and working reports; no needs-user or completion transition was requested",
+            "osc_7501_emitted_through_shell_pty": true,
+            "program_status_exact_owner": true,
+            "program_status_available": programTerminal.availability == .available,
+            "availability": programTerminal.availability.rawValue,
+            "alert_feed_present": programSnapshot.programStatusAlerts != nil,
+            "focused_terminal_full_records": true,
+            "record_count": programTerminal.recordCount,
+            "records_complete": programTerminal.recordsComplete,
+            "omitted_records": programTerminal.omittedRecords,
+            "nonfocused_priority_summary": true,
+            "nonfocused_records_complete": nonfocusedTerminal.recordsComplete,
+            "nonfocused_visible_record_count": nonfocusedTerminal.records.count,
+            "priority_summary_record_id": nonfocusedTerminal.records.first?.id ?? "",
+            "provider_status_coexistence": true,
+            "program_selection_started_in_other_workspace": true,
+            "program_selection_exact_identity": true,
+            "program_complete_inventory_unchanged": true,
+            "owner": [
+                "identity_namespace": programTarget.identityNamespace.uuidString.lowercased(),
+                "window_id": programTarget.windowId,
+                "window_uuid": programTarget.windowUuid.uuidString.lowercased(),
+                "workspace_id": programTarget.workspaceId,
+                "workspace_uuid": programTarget.workspaceUuid.uuidString.lowercased(),
+                "pane_id": programTarget.paneId,
+                "pane_uuid": programTarget.paneUuid.uuidString.lowercased(),
+                "surface_id": programTarget.surfaceId,
+                "surface_uuid": programTarget.surfaceUuid.uuidString.lowercased(),
+                "session_id": programTarget.sessionId,
+                "session_epoch": programTarget.sessionEpoch,
+                "command_epoch": programTarget.commandEpoch,
+                "record_id": programTarget.id
+            ],
+            "records": [
+                ["id": "", "state": rootProgram.state.rawValue, "title": rootProgram.title ?? ""],
+                ["id": childProgram.id, "state": childProgram.state.rawValue,
+                 "progress": childProgram.progress ?? 0, "title": childProgram.title ?? ""]
+            ],
+            "provider_count": afterProgramSelection.agentLifecycle?.count ?? 0,
+            "surface_count": programInventoryAfter.surfaces.count,
+            "target_process_id": programInventoryAfter.processIDs[targetSurface.id] ?? 0,
+            "changed_surface_ids": changedProgramSurfaces
+        ]
+
         func lifecycleIdentity(_ record: AgentLifecycleRecord) throws -> [String: Any] {
             guard let expected = expectedAgentRows.first(where: { $0.provider == record.provider }),
                   let projection = agentProjection.first(where: { $0["provider"] as? String == record.provider }) else {
@@ -1111,6 +1339,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard !sidebarCollapsed, abs(sidebarContainer.bounds.width - 224) < 1 else { throw BridgeFailure(message: "Sidebar toggle did not restore its width") }
         try unchanged(); try geometry()
         try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar.png"))
+        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-programs.png"))
         let windowScopingVerified = snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true
         guard let statusMenu = coordinator.statusMenu else { throw BridgeFailure(message: "Application has no macOS status menu") }
         try await statusMenu.validateNativeMenu(report: report.deletingLastPathComponent().appendingPathComponent("native-status-menu.json"),
@@ -1122,7 +1351,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
             "window_scoping": windowScopingVerified, "native_terminal_damage": true]
         receipt.merge(agentAcceptance) { _, new in new }
+        receipt["programs"] = programAcceptance
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+        let programReport = report.deletingLastPathComponent().appendingPathComponent("native-sidebar-programs.json")
+        try JSONSerialization.data(withJSONObject: programAcceptance, options: [.prettyPrinted, .sortedKeys])
+            .write(to: programReport, options: .atomic)
     }
     fileprivate func captureSidebarImage(_ url: URL) throws {
         guard let view = window.contentView, let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw BridgeFailure(message: "Sidebar drawing surface unavailable") }
@@ -1312,6 +1545,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         rebuildWorkspaceRowsIfNeeded(snapshot)
         updateWorkspaceRows(snapshot)
         updateAgentSidebar(snapshot)
+        updateProgramSidebar(snapshot)
         updateHeader(snapshot)
         updateNotifications(snapshot)
         updateTerminalLayoutIfNeeded(snapshot)
@@ -1535,6 +1769,84 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         agentSidebarList.update(presentations, statusAvailable: true)
     }
 
+    private func updateProgramSidebar(_ snapshot: DesktopSnapshot) {
+        guard let terminals = snapshot.programStatus else {
+            programSidebarList.update(nil, statusAvailable: false)
+            return
+        }
+        guard let identity, identity.namespace == snapshot.model.identityNamespace,
+              let owner = snapshot.model.windows.first(where: { $0.id == identity.windowId }),
+              let windowUUID else {
+            programSidebarList.update(nil, statusAvailable: false)
+            return
+        }
+
+        let workspaceUUIDs = Dictionary(snapshot.workspaceIdentities.map { ($0.workspaceId, $0.uuid) }, uniquingKeysWith: { first, _ in first })
+        let workspaceNameCounts = Dictionary(
+            grouping: snapshot.model.workspaces.filter { owner.workspaceIds.contains($0.id) },
+            by: \.name
+        ).mapValues { $0.count }
+        var presentations: [ProgramSidebarTerminalPresentation] = []
+        for terminal in terminals {
+            guard terminal.source == .osc7501,
+                  terminal.identityNamespace == identity.namespace,
+                  terminal.windowId == identity.windowId,
+                  terminal.windowUuid == windowUUID,
+                  owner.workspaceIds.contains(terminal.workspaceId),
+                  workspaceUUIDs[terminal.workspaceId] == terminal.workspaceUuid,
+                  let workspace = snapshot.model.workspaces.first(where: { $0.id == terminal.workspaceId }),
+                  let pane = workspace.root.panes.first(where: { $0.id == terminal.paneId }),
+                  let surface = pane.surfaces.first(where: { $0.id == terminal.surfaceId }),
+                  surface.kind == "terminal", surface.sessionId == terminal.sessionId else { continue }
+            let isSelected = snapshot.model.focusedWindow == identity.windowId
+                && owner.selectedWorkspace == workspace.id
+                && workspace.focusedPane == pane.id
+                && pane.selectedSurface == surface.id
+            let paneNumber = (workspace.root.panes.firstIndex(where: { $0.id == pane.id }) ?? 0) + 1
+            let tabNumber = (pane.surfaces.firstIndex(where: { $0.id == surface.id }) ?? 0) + 1
+            let workspaceContext: String
+            if workspaceNameCounts[workspace.name, default: 0] > 1,
+               let workspaceOrdinal = owner.workspaceIds.firstIndex(of: workspace.id) {
+                workspaceContext = "Workspace \(workspaceOrdinal + 1) · "
+            } else {
+                workspaceContext = ""
+            }
+            let surfaceContext = "\(workspaceContext)Pane \(paneNumber) · Tab \(tabNumber)"
+            let surfaceTitle = surface.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let terminalTitle = surfaceTitle.isEmpty || surfaceTitle == "Terminal" ? "Terminal" : surfaceTitle
+            let records = terminal.records.map { record in
+                ProgramSidebarPresentation(
+                    target: ProgramSelectionTarget(terminal: terminal, record: record),
+                    source: terminal.source,
+                    availability: terminal.availability,
+                    state: record.state,
+                    kind: record.kind,
+                    progress: record.progress,
+                    app: record.effectiveApp ?? record.app,
+                    title: record.title,
+                    message: record.msg,
+                    workspaceName: workspace.name,
+                    surfaceTitle: terminalTitle,
+                    surfaceContext: surfaceContext,
+                    isSelected: isSelected
+                )
+            }
+            guard !records.isEmpty else { continue }
+            presentations.append(ProgramSidebarTerminalPresentation(
+                identity: terminal.identity,
+                availability: terminal.availability,
+                recordCount: terminal.recordCount,
+                recordsComplete: terminal.recordsComplete,
+                omittedRecords: terminal.omittedRecords,
+                workspaceName: workspace.name,
+                surfaceTitle: terminalTitle,
+                surfaceContext: surfaceContext,
+                records: records
+            ))
+        }
+        programSidebarList.update(presentations, statusAvailable: true)
+    }
+
     private func selectAgentTarget(_ target: AgentLifecycleRecord) {
         guard let identity, let snapshot = coordinator.snapshot, let windowUUID,
               identity.namespace == snapshot.model.identityNamespace,
@@ -1555,6 +1867,32 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         Task { [weak self, bridge = self.bridge] in
             do {
                 try await bridge.selectAgentTarget(target)
+            } catch {
+                self?.showError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func selectProgramTarget(_ target: ProgramSelectionTarget) {
+        guard let identity, let snapshot = coordinator.snapshot, let windowUUID,
+              identity.namespace == snapshot.model.identityNamespace,
+              snapshot.programStatus?.contains(where: { target.matches($0) }) == true,
+              target.identityNamespace == identity.namespace,
+              target.windowId == identity.windowId,
+              target.windowUuid == windowUUID,
+              let owner = snapshot.model.windows.first(where: { $0.id == identity.windowId }),
+              owner.workspaceIds.contains(target.workspaceId),
+              snapshot.workspaceIdentities.contains(where: { $0.workspaceId == target.workspaceId && $0.uuid == target.workspaceUuid }),
+              let workspace = snapshot.model.workspaces.first(where: { $0.id == target.workspaceId }),
+              let pane = workspace.root.panes.first(where: { $0.id == target.paneId }),
+              let surface = pane.surfaces.first(where: { $0.id == target.surfaceId }),
+              surface.kind == "terminal", surface.sessionId == target.sessionId else {
+            showError("Program target is no longer available")
+            return
+        }
+        Task { [weak self, bridge = self.bridge] in
+            do {
+                try await bridge.selectProgramTarget(target)
             } catch {
                 self?.showError(error.localizedDescription)
             }

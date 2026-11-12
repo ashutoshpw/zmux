@@ -111,6 +111,9 @@ ZMUX_SHELL_INTEGRATION_DISABLED=1    # skip all shell integration (set before la
 ```
 
 `zmux hooks claude` is separate. It manages opt-in agent messaging.
+
+Terminal-local self-reported program status is an in-progress OSC 7501
+integration; see the [program status guide](docs/program-status.md).
 </details>
 
 <details>

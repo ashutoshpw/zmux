@@ -1,142 +1,104 @@
 use crate::{EngineKind, EngineOptions, SessionError};
-#[cfg(feature = "ghostty")]
-use zmux_terminal_adapter::Engine;
+use zmux_program_status::SessionEpoch;
 use zmux_terminal_adapter::{
-    EngineBatch, Pointer, ProgramOpenRequest, ProgramOpenRequestError, Size, Terminal, Viewport,
-    Wheel,
+    Engine, EngineBatch, EngineKind as AdapterEngineKind, Pointer, ProgramOpenRequest,
+    ProgramOpenRequestError, Size, Viewport, Wheel,
 };
 
-// Default sessions retain their existing immediate vt100 path and frame cadence.
-// The larger worker-bound owner stays inline to avoid an extra infallible Box.
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum TerminalOwner {
-    Vt100(Terminal),
-    #[cfg(feature = "ghostty")]
-    Ghostty(Engine),
-}
+/// Every session uses the staged owner so frame/status publication and causal
+/// replies share one commit boundary on the sole PTY worker.
+pub(crate) struct TerminalOwner(Engine);
 
 impl TerminalOwner {
     pub(crate) fn encode_key(
         &mut self,
         event: zmux_terminal_adapter::KeyEvent,
     ) -> Result<Vec<u8>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => Ok(terminal.encode_key(event)),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.encode_key(event).map_err(failure),
-        }
+        self.0.encode_key(event).map_err(failure)
     }
+
     pub(crate) fn encode_paste(&mut self, text: &str) -> Result<Vec<u8>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => Ok(terminal.encode_paste(text)),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.encode_paste(text).map_err(failure),
-        }
+        self.0.encode_paste(text).map_err(failure)
     }
+
     pub(crate) fn new(
         size: Size,
         options: Option<EngineOptions>,
         expected_open_nonce: Option<[u8; 16]>,
+        session_epoch: SessionEpoch,
     ) -> Result<Self, SessionError> {
         let kind = options.map_or(EngineKind::Vt100, |options| options.kind);
-        match kind {
-            EngineKind::Vt100 => Terminal::new_with_open_request_nonce(size, expected_open_nonce)
-                .map(Self::Vt100)
-                .map_err(failure),
+        let adapter_kind = match kind {
+            EngineKind::Vt100 => AdapterEngineKind::Vt100,
             #[cfg(feature = "ghostty")]
-            EngineKind::Ghostty(limits) => {
-                // Ghostty currently has no OSC opener metadata support.
-                Engine::new(size, zmux_terminal_adapter::EngineKind::Ghostty(limits))
-                    .map(Self::Ghostty)
-                    .map_err(failure)
-            }
-        }
+            EngineKind::Ghostty(limits) => AdapterEngineKind::Ghostty(limits),
+        };
+        Engine::new_with_session_epoch(size, adapter_kind, expected_open_nonce, session_epoch)
+            .map(Self)
+            .map_err(failure)
     }
+
     pub(crate) fn stages_mutations(&self) -> bool {
-        match self {
-            Self::Vt100(_) => false,
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(_) => true,
-        }
+        true
     }
+
     pub(crate) fn viewport(&self) -> Viewport {
-        match self {
-            Self::Vt100(terminal) => terminal.viewport(),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.viewport().clone(),
-        }
+        self.0.viewport().clone()
     }
+
     pub(crate) fn process(&mut self, bytes: &[u8]) -> Result<Option<EngineBatch>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => terminal.process(bytes).map(|()| None).map_err(failure),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.stage_process(bytes).map(Some).map_err(failure),
-        }
+        self.0
+            .stage_process_deferred(bytes)
+            .map(Some)
+            .map_err(failure)
     }
+
     pub(crate) fn take_open_requests(
         &mut self,
     ) -> Result<Vec<ProgramOpenRequest>, ProgramOpenRequestError> {
-        match self {
-            Self::Vt100(terminal) => terminal.take_open_requests(),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.take_open_requests(),
-        }
+        self.0.take_open_requests()
     }
+
     pub(crate) fn resize(&mut self, size: Size) -> Result<Option<EngineBatch>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => terminal.resize(size).map(|()| None).map_err(failure),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.stage_resize(size).map(Some).map_err(failure),
-        }
+        self.0.stage_resize(size).map(Some).map_err(failure)
     }
+
     pub(crate) fn scroll(&mut self, lines: i32) -> Result<Option<EngineBatch>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => terminal.scroll(lines).map(|()| None).map_err(failure),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.stage_scroll(lines).map(Some).map_err(failure),
-        }
+        self.0.stage_scroll(lines).map(Some).map_err(failure)
     }
-    pub(crate) fn pointer(&mut self, event: Pointer) -> Result<Vec<u8>, SessionError> {
-        match self {
-            Self::Vt100(terminal) => Ok(terminal.pointer(event)),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(_) => Err(SessionError::Failure(
-                "Ghostty pointer reporting is not yet supported".into(),
-            )),
-        }
-    }
-    pub(crate) fn wheel(
+
+    pub(crate) fn pointer(
         &mut self,
-        event: Wheel,
-    ) -> Result<(Vec<u8>, Option<EngineBatch>), SessionError> {
-        match self {
-            Self::Vt100(terminal) => Ok((terminal.wheel(event), None)),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) if event.history => terminal.stage_scroll(event.lines.clamp(-1000,1000))
-                .map(|batch| (Vec::new(), Some(batch))).map_err(failure),
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(_) => Err(SessionError::Failure("Ghostty application wheel encoding is not yet supported; explicit history navigation is available".into())),
-        }
+        event: Pointer,
+    ) -> Result<(Vec<u8>, EngineBatch), SessionError> {
+        self.0.pointer(event).map_err(failure)
     }
+
+    pub(crate) fn wheel(&mut self, event: Wheel) -> Result<(Vec<u8>, EngineBatch), SessionError> {
+        self.0.wheel(event).map_err(failure)
+    }
+
+    pub(crate) fn attached_child_exited(&mut self) -> Result<EngineBatch, SessionError> {
+        self.0.stage_attached_child_exited().map_err(failure)
+    }
+
+    pub(crate) fn terminal_closed(&mut self) -> Result<Viewport, SessionError> {
+        self.0.terminal_closed_viewport().map_err(failure)
+    }
+
     pub(crate) fn commit(&mut self, batch: &EngineBatch) -> Result<(), SessionError> {
-        match self {
-            #[cfg(feature = "ghostty")]
-            Self::Ghostty(terminal) => terminal.commit(batch.generation()).map_err(failure),
-            Self::Vt100(_) => {
-                let _ = batch;
-                Err(SessionError::Failure(
-                    "unexpected staged vt100 batch".into(),
-                ))
-            }
-        }
+        self.0.commit(batch.generation()).map_err(failure)
     }
+
     pub(crate) fn abort(&mut self) {
-        #[cfg(feature = "ghostty")]
-        if let Self::Ghostty(terminal) = self {
-            terminal.abort();
-        }
+        self.0.abort();
+    }
+
+    pub(crate) fn refresh_viewport(&mut self) -> Result<(), SessionError> {
+        self.0.refresh_viewport().map_err(failure)
     }
 }
+
 fn failure(error: impl std::fmt::Display) -> SessionError {
     SessionError::Failure(error.to_string())
 }

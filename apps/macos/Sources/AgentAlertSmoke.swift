@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// Exercises the native alert preference and snapshot-dedupe owner without requesting
 /// notification permission or emitting real audio.
@@ -167,18 +168,62 @@ enum AgentAlertSmoke {
             "subtitle": "",
             "body": "Input is needed",
             "reply_enabled": false,
-            "agent_alert_kind": "needs_user"
+            "agent_alert_kind": "needs_user",
+            "alert_sound_source": "agent_lifecycle",
+            "alert_sound_kind": "needs_user"
         ]
         let requestData = try JSONSerialization.data(withJSONObject: requestPayload)
         let request = try decoder.decode(NativeNotificationRequest.self, from: requestData)
-        guard request.agentAlertKind == "needs_user" else {
+        guard request.agentAlertKind == "needs_user",
+              request.alertSoundSource == .agentLifecycle,
+              request.alertSoundKind == .needsUser,
+              request.soundRoutingIsValid,
+              request.localSoundKind == .needsUser,
+              request.suppressesSystemSound,
+              !NotificationDelivery.presentationOptions(for: request).contains(.sound) else {
             throw failure("Rust lifecycle notification omitted its silent-audio discriminator")
+        }
+        var oscPayload = requestPayload
+        oscPayload.removeValue(forKey: "agent_alert_kind")
+        oscPayload["alert_sound_source"] = "osc7501"
+        oscPayload["alert_sound_kind"] = "needs_user"
+        let oscData = try JSONSerialization.data(withJSONObject: oscPayload)
+        let oscRequest = try decoder.decode(NativeNotificationRequest.self, from: oscData)
+        guard oscRequest.alertSoundSource == .osc7501,
+              oscRequest.alertSoundKind == .needsUser,
+              oscRequest.soundRoutingIsValid,
+              oscRequest.localSoundKind == .needsUser,
+              oscRequest.suppressesSystemSound,
+              !NotificationDelivery.presentationOptions(for: oscRequest).contains(.sound) else {
+            throw failure("OSC-origin notification did not select local needs-user audio and suppress OS sound")
         }
         var legacyPayload = requestPayload
         legacyPayload.removeValue(forKey: "agent_alert_kind")
+        legacyPayload.removeValue(forKey: "alert_sound_source")
+        legacyPayload.removeValue(forKey: "alert_sound_kind")
         let legacyData = try JSONSerialization.data(withJSONObject: legacyPayload)
-        guard try decoder.decode(NativeNotificationRequest.self, from: legacyData).agentAlertKind == nil else {
+        let legacy = try decoder.decode(NativeNotificationRequest.self, from: legacyData)
+        guard legacy.agentAlertKind == nil,
+              legacy.alertSoundSource == nil,
+              legacy.alertSoundKind == nil,
+              legacy.soundRoutingIsValid,
+              !legacy.suppressesSystemSound,
+              NotificationDelivery.presentationOptions(for: legacy).contains(.sound) else {
             throw failure("legacy terminal notifications did not retain their default system sound behavior")
+        }
+
+        for invalid in [
+            ["alert_sound_source": "osc7501"],
+            ["alert_sound_kind": "needs_user"],
+            ["alert_sound_source": "osc7501", "alert_sound_kind": "needs_user", "agent_alert_kind": "needs_user"]
+        ] {
+            var payload = legacyPayload
+            for (key, value) in invalid { payload[key] = value }
+            let malformedData = try JSONSerialization.data(withJSONObject: payload)
+            guard let malformed = try? decoder.decode(NativeNotificationRequest.self, from: malformedData),
+                  !malformed.soundRoutingIsValid else {
+                throw failure("native notification accepted an incomplete or conflicting local-sound source tag")
+            }
         }
     }
 

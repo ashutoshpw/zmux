@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Promoted original fixed-storage normalization from the reviewed metadata owner.
 use crate::owner::{Error, buffer};
+use zmux_program_status::{IngestOutcome, ProgramStatusSnapshot, ProgramStatusStore, SessionEpoch};
 
 const TITLE_BYTES: usize = 1024;
 const CWD_BYTES: usize = 4096;
@@ -33,6 +34,7 @@ pub(crate) struct MetaState {
     pub(crate) count: usize,
     pub(crate) next: u64,
     pub(crate) evicted: u64,
+    program_status: ProgramStatusStore,
 }
 fn display_into(out: &mut [u8], mut bytes: &[u8], limit: usize) -> usize {
     let mut length = 0;
@@ -75,7 +77,7 @@ fn display_into(out: &mut [u8], mut bytes: &[u8], limit: usize) -> usize {
     length
 }
 impl MetaState {
-    pub(crate) fn new() -> Result<Self, Error> {
+    pub(crate) fn new(session_epoch: SessionEpoch) -> Result<Self, Error> {
         Ok(Self {
             data: buffer(META_STATE).map_err(|_| Error::Allocation)?,
             title: 0,
@@ -84,9 +86,11 @@ impl MetaState {
             count: 0,
             next: 0,
             evicted: 0,
+            program_status: ProgramStatusStore::try_new(session_epoch)
+                .map_err(|_| Error::ProgramStatusAllocation)?,
         })
     }
-    pub(crate) fn copy_from(&mut self, last: &Self) {
+    pub(crate) fn copy_from(&mut self, last: &Self) -> Result<(), Error> {
         self.title = last.title;
         self.cwd = last.cwd;
         self.notices = last.notices;
@@ -106,6 +110,9 @@ impl MetaState {
                 &last.data[start + NOTICE_TITLE..start + NOTICE_TITLE + notice.body],
             );
         }
+        self.program_status
+            .copy_from(&last.program_status)
+            .map_err(|_| Error::Invalid)
     }
     pub(crate) fn title(&self) -> &str {
         std::str::from_utf8(&self.data[..self.title]).unwrap()
@@ -122,6 +129,25 @@ impl MetaState {
             std::str::from_utf8(&self.data[start + NOTICE_TITLE..start + NOTICE_TITLE + n.body])
                 .unwrap(),
         )
+    }
+    pub(crate) fn program_status_snapshot(&self) -> Result<ProgramStatusSnapshot, Error> {
+        self.program_status
+            .snapshot(None)
+            .map_err(|_| Error::ProgramStatusSnapshot)
+    }
+    pub(crate) fn attached_child_exited(&mut self) -> Result<(), Error> {
+        self.program_status
+            .attached_child_exited()
+            .map_err(|_| Error::ProgramStatusLifecycle)
+    }
+    pub(crate) fn terminal_closed_snapshot(&mut self) -> Result<ProgramStatusSnapshot, Error> {
+        let cursor = self.program_status_snapshot()?.cursor;
+        self.program_status
+            .terminal_closed()
+            .map_err(|_| Error::ProgramStatusLifecycle)?;
+        self.program_status
+            .snapshot(Some(cursor))
+            .map_err(|_| Error::ProgramStatusSnapshot)
     }
     pub(crate) fn notice(&mut self, source: u32, title: &[u8], body: &[u8]) -> Result<(), ()> {
         // Filter first into fixed scratch; suppress empty titles before consuming sequence.
@@ -223,6 +249,22 @@ impl MetaState {
                 }
             }
             1337 if record.subcommand == 9 => {} // compatibility cwd policy
+            7501 => {
+                let terminator_bytes = if record.terminator == 7 { 1 } else { 2 };
+                let full_sequence_len = bytes.len().checked_add(7 + terminator_bytes).ok_or(())?;
+                if matches!(
+                    self.program_status.ingest(bytes, full_sequence_len),
+                    IngestOutcome::Failed(_)
+                ) {
+                    return Err(());
+                }
+            }
+            133 if record.subcommand == 1 => {
+                self.program_status.prompt_boundary().map_err(|_| ())?;
+            }
+            133 if record.subcommand == 2 => {
+                self.program_status.ris().map_err(|_| ())?;
+            }
             _ => return Err(()),
         }
         Ok(())

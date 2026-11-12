@@ -7,6 +7,7 @@ fn run(command: &mut Command) {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=ZMUX_GHOSTTY_ARTIFACT_ROOT");
+    println!("cargo:rerun-if-env-changed=ZMUX_GHOSTTY_CANDIDATE_SET");
     println!("cargo:rerun-if-env-changed=CC");
     println!("cargo:rerun-if-env-changed=AR");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
@@ -17,10 +18,18 @@ fn main() {
     let artifact = env::var_os("ZMUX_GHOSTTY_ARTIFACT_ROOT").expect(
         "ghostty requires explicit ZMUX_GHOSTTY_ARTIFACT_ROOT; no download/discovery fallback",
     );
+    let candidate_set =
+        env::var("ZMUX_GHOSTTY_CANDIDATE_SET").unwrap_or_else(|_| "historical".to_owned());
     let target = env::var("TARGET").unwrap();
     let output = Command::new("python3")
         .arg(root.join("tools/terminal-engine-artifacts/accept-linkage.py"))
-        .args(["--target", &target, "--root"])
+        .args([
+            "--candidate-set",
+            &candidate_set,
+            "--target",
+            &target,
+            "--root",
+        ])
         .arg(artifact)
         .output()
         .expect("cannot run retained artifact acceptance");

@@ -542,6 +542,25 @@ fn p05_clear_is_segment_aware_and_invalid_paths_do_not_fall_back_to_root() {
         State::Working
     );
 
+    // A malformed duplicate is skipped before applying id-specific limits,
+    // including when its invalid value also exceeds a byte, segment or depth cap.
+    for (invalid, state, expected) in [
+        (format!("{}@", "a".repeat(128)), "blocked", State::Blocked),
+        (format!("{}@", "a".repeat(32)), "error", State::Error),
+        ("a/a/a/a/a/a/a/a/@".into(), "idle", State::Idle),
+    ] {
+        assert!(matches!(
+            ingest(
+                &mut store,
+                &format!("state={state}:id=build/test:id={invalid}")
+            ),
+            IngestOutcome::Applied { .. }
+        ));
+        let snapshot = store.snapshot(None).unwrap();
+        assert_eq!(record(&snapshot, "build/test").state, expected);
+        assert_eq!(record(&snapshot, "").state, State::Done);
+    }
+
     // Dot segments are legal literal protocol names. They are not normalized as
     // filesystem paths and do not alias the root record.
     assert!(matches!(

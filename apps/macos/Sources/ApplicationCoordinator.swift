@@ -59,6 +59,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     private(set) var snapshot: DesktopSnapshot?
     private var agentAlertReconciliationPending = true
     private var agentAlertConnectionTracker = AgentAlertConnectionTracker()
+    private var programAlertReconciliationPending = true
     private(set) var mainWindowHosts: [MainWindowIdentity: MainWindowHost] = [:]
     private lazy var initialWindowHost = MainWindowHost(coordinator: self)
     private var initialHostClaimed = false
@@ -794,6 +795,19 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         } else {
             // Older or incomplete snapshot shapes cannot prove which ring entries are new.
             agentAlertReconciliationPending = true
+        }
+        if snapshot.programStatusAlerts != nil, snapshot.programStatus != nil {
+            let accepted = notificationDelivery.updateProgramAlerts(
+                snapshot.programStatusAlerts,
+                current: snapshot.programStatus,
+                mode: programAlertReconciliationPending ? .reconcile : .live
+            )
+            programAlertReconciliationPending = !accepted
+        } else {
+            // A missing status or event snapshot breaks cursor continuity. Reset
+            // and reconcile the next complete snapshot before allowing audio.
+            _ = notificationDelivery.updateProgramAlerts(nil, current: nil)
+            programAlertReconciliationPending = true
         }
         // Detach every changed old hierarchy before attaching any new hierarchy.
         // A shared surface/session view can belong to at most one native parent.

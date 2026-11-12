@@ -3,6 +3,13 @@ name: Terminal engine retained Darwin linkage
 on:
   workflow_dispatch:
     inputs:
+      candidate_set:
+        description: Historical retained libraries or a reviewed Ghostty OSC 7501 linkage candidate
+        type: choice
+        options:
+          - historical
+          - ghostty-7501-v1
+        default: historical
       include_session_runtime:
         description: Also compile both optional Session targets and execute ARM PTY tests
         type: boolean
@@ -36,19 +43,22 @@ jobs:
       - name: Install pinned Rust with both Apple standard libraries
         run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
       - name: Check bounded retained-input, archive and Mach-O policies
+        env:
+          CANDIDATE_SET: ${{ inputs.candidate_set }}
         run: |
           python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
-          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --check-inputs
+          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --candidate-set "$CANDIDATE_SET" --check-inputs
       - name: Link retained libraries and optional Session/native host fixtures; execute ARM only
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SET: ${{ inputs.candidate_set }}
           INCLUDE_SESSION_RUNTIME: ${{ inputs.include_session_runtime }}
           INCLUDE_NATIVE_HOST: ${{ inputs.include_native_host }}
         run: |
           flags=()
           if [ "$INCLUDE_SESSION_RUNTIME" = "true" ]; then flags+=(--session-runtime); fi
           if [ "$INCLUDE_NATIVE_HOST" = "true" ]; then flags+=(--native-host); fi
-          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py "${flags[@]}" --output "$RUNNER_TEMP/terminal-engine-linkage"
+          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --candidate-set "$CANDIDATE_SET" "${flags[@]}" --output "$RUNNER_TEMP/terminal-engine-linkage"
       - name: Retain original provenance and new linkage evidence even after failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

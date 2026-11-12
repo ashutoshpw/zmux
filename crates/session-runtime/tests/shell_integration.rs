@@ -73,6 +73,22 @@ fn wait_for_file(path: &std::path::Path, context: &str) {
     }
 }
 
+#[test]
+fn managed_ssh_bootstrap_fits_a_single_exec_argument() {
+    let command =
+        shell_integration::remote_command(&shell_integration::OpenRequestNonce::generate());
+    let status = Command::new("/bin/true")
+        .arg(&command)
+        .status()
+        .expect("managed SSH command must fit the platform exec argument limit");
+    assert!(status.success());
+    assert!(
+        command.len() <= 64 * 1024,
+        "managed SSH command is {} bytes, above the 64 KiB transport budget",
+        command.len()
+    );
+}
+
 fn plugin_host_line(lines: &mpsc::Receiver<std::io::Result<String>>, context: &str) -> String {
     lines
         .recv_timeout(Duration::from_secs(3))
@@ -810,6 +826,135 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
         wait("VERSION_PASSTHROUGH");
         session.shutdown(Duration::from_secs(3)).unwrap();
     }
+}
+
+#[test]
+fn integrated_shells_emit_prompt_boundaries_after_user_hooks_without_relaunching_commands() {
+    let directory = Directory::new();
+    let fish_config = directory.0.join(".config/fish");
+    fs::create_dir_all(&fish_config).unwrap();
+    fs::write(
+        directory.0.join(".bashrc"),
+        "PROMPT_COMMAND='printf x >> \"$ZMUX_PROMPT_HOOK_REPORT\"'\nPS1='zmux> '\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.0.join(".zshrc"),
+        "PROMPT='zmux> '\nprecmd() { printf x >> \"$ZMUX_PROMPT_HOOK_REPORT\"; }\n",
+    )
+    .unwrap();
+    fs::write(
+        fish_config.join("config.fish"),
+        "function fish_prompt\n    printf x >> \"$ZMUX_PROMPT_HOOK_REPORT\"\n    printf 'zmux> '\nend\n",
+    )
+    .unwrap();
+
+    let mut tested = 0;
+    for (shell, args) in [
+        ("bash", vec!["-i"]),
+        ("zsh", vec!["-i"]),
+        ("fish", vec!["--interactive"]),
+    ] {
+        if !Command::new(shell)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            eprintln!("{shell} is not installed; integrated prompt coverage skipped");
+            continue;
+        }
+        tested += 1;
+        let prompt_report = directory.0.join(format!("{shell}-prompt-hooks"));
+        let command_report = directory.0.join(format!("{shell}-command-runs"));
+        let (launch, lease) = shell_integration::prepare(Launch {
+            program: shell.into(),
+            args: args.into_iter().map(str::to_owned).collect(),
+            cwd: Some(directory.0.clone()),
+            size: Size { rows: 8, cols: 72 },
+        })
+        .unwrap();
+        let mut session = Session::spawn_with_resource(
+            launch,
+            &[
+                ("HOME".into(), directory.0.to_string_lossy().into_owned()),
+                ("ZDOTDIR".into(), directory.0.to_string_lossy().into_owned()),
+                (
+                    "ZMUX_PROMPT_HOOK_REPORT".into(),
+                    prompt_report.to_string_lossy().into_owned(),
+                ),
+                (
+                    "ZMUX_COMMAND_RUN_REPORT".into(),
+                    command_report.to_string_lossy().into_owned(),
+                ),
+            ],
+            lease,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let initial_epoch = loop {
+            let snapshot = session.snapshot().unwrap();
+            assert_ne!(
+                snapshot.state,
+                State::Failed,
+                "{shell}: {:?}",
+                snapshot.failure
+            );
+            if snapshot.viewport.program_status.command_epoch.0 > 0 && prompt_report.is_file() {
+                break snapshot.viewport.program_status.command_epoch.0;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{shell} prompt marker did not run"
+            );
+            thread::sleep(Duration::from_millis(3));
+        };
+        let prompt_count_before = fs::read_to_string(&prompt_report).unwrap().len();
+        session
+            .send_input(
+                b"printf '\\033]7501;state=working:id=shell-cycle\\007'; printf x >> \"$ZMUX_COMMAND_RUN_REPORT\"\n",
+            )
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            let snapshot = session.snapshot().unwrap();
+            assert_ne!(
+                snapshot.state,
+                State::Failed,
+                "{shell}: {:?}",
+                snapshot.failure
+            );
+            let prompt_count = fs::read_to_string(&prompt_report).map_or(0, |text| text.len());
+            let status_is_retired = !snapshot
+                .viewport
+                .program_status
+                .records
+                .iter()
+                .any(|record| record.id.as_ref() == "shell-cycle");
+            if snapshot.viewport.program_status.command_epoch.0 > initial_epoch
+                && prompt_count > prompt_count_before
+                && command_report.is_file()
+                && status_is_retired
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{shell} command prompt cycle did not complete"
+            );
+            thread::sleep(Duration::from_millis(3));
+        }
+        assert_eq!(
+            fs::read_to_string(&command_report).unwrap(),
+            "x",
+            "{shell} command ran more than once"
+        );
+        session.shutdown(Duration::from_secs(3)).unwrap();
+    }
+    assert!(tested > 0, "no supported interactive shell is installed");
 }
 
 #[test]

@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const AGENT_LIFECYCLE_PROTOCOL_VERSION: u8 = 3;
+pub const AGENT_LIFECYCLE_PROTOCOL_VERSION: u8 = 4;
 pub const MAX_AGENT_LIFECYCLE_FRAME_BYTES: usize = 4_096;
 pub const MAX_PENDING_HOOK_RECEIPTS: usize = 64;
 /// Maximum UTF-8 bytes accepted for an opaque provider session or turn ID.
@@ -163,6 +163,61 @@ mod tests {
     }
 
     #[test]
+    fn pending_provider_route_and_exact_receipt_round_trip_on_protocol_v4() {
+        let nonce = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let route_id = Uuid::new_v4();
+        let provider_generation = Uuid::new_v4();
+        for (phase_name, expected_phase) in [
+            ("starting", ProviderRoutePhase::Starting),
+            ("ended", ProviderRoutePhase::Ended),
+            ("cancelled", ProviderRoutePhase::Cancelled),
+        ] {
+            let decoded: Frame = serde_json::from_value(serde_json::json!({
+                "kind": "provider_route",
+                "version": AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                "nonce": nonce,
+                "generation": generation,
+                "sequence": 9,
+                "provider": "codex",
+                "route_id": route_id,
+                "provider_generation": provider_generation,
+                "phase": phase_name
+            }))
+            .unwrap();
+            assert_eq!(decoded.version(), AGENT_LIFECYCLE_PROTOCOL_VERSION);
+            assert_eq!(decoded.nonce(), nonce);
+            assert_eq!(decoded.generation(), Some(generation));
+            assert_eq!(decoded.sequence(), Some(9));
+            assert!(matches!(
+                decoded,
+                Frame::ProviderRoute {
+                    provider: ProviderKind::Codex,
+                    route_id: got_route,
+                    provider_generation: got_provider_generation,
+                    phase,
+                    ..
+                } if got_route == route_id
+                    && got_provider_generation == provider_generation
+                    && phase == expected_phase
+            ));
+        }
+
+        let receipt = ClientFrame::ProviderRouteReceipt {
+            version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+            nonce,
+            generation,
+            route_id,
+            accepted: false,
+        };
+        let encoded = serde_json::to_value(receipt).unwrap();
+        assert_eq!(encoded["kind"], "provider_route_receipt");
+        assert_eq!(encoded["version"], AGENT_LIFECYCLE_PROTOCOL_VERSION);
+        assert_eq!(encoded["route_id"], route_id.to_string());
+        assert_eq!(encoded["accepted"], false);
+    }
+
+    #[test]
     fn provider_state_rejects_subagents_missing_turns_and_unbounded_ids() {
         let mut observation = ProviderLifecycleObservation {
             provider: ProviderKind::Codex,
@@ -211,6 +266,15 @@ pub enum HookDisposition {
     NotHandled,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderRoutePhase {
+    Starting,
+    Ended,
+    /// The route was admitted, but its provider child never started.
+    Cancelled,
+}
+
 /// Frames sent by the local owner back to the remote lifecycle stream.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -227,6 +291,13 @@ pub enum ClientFrame {
         /// Zmux-generated per-hook correlation UUID, not a provider event ID.
         event_id: Uuid,
         disposition: HookDisposition,
+    },
+    ProviderRouteReceipt {
+        version: u8,
+        nonce: Uuid,
+        generation: Uuid,
+        route_id: Uuid,
+        accepted: bool,
     },
 }
 
@@ -265,6 +336,18 @@ pub enum Frame {
         sequence: u64,
         observation: Box<ProviderLifecycleObservation>,
     },
+    /// Exact pending provider-route admission. The receipt is required before
+    /// the remote helper starts the named provider child.
+    ProviderRoute {
+        version: u8,
+        nonce: Uuid,
+        generation: Uuid,
+        sequence: u64,
+        provider: ProviderKind,
+        route_id: Uuid,
+        provider_generation: Uuid,
+        phase: ProviderRoutePhase,
+    },
     Gap {
         version: u8,
         nonce: Uuid,
@@ -281,6 +364,7 @@ impl Frame {
             | Self::Heartbeat { version, .. }
             | Self::Hook { version, .. }
             | Self::ProviderState { version, .. }
+            | Self::ProviderRoute { version, .. }
             | Self::Gap { version, .. } => *version,
         }
     }
@@ -292,6 +376,7 @@ impl Frame {
             | Self::Heartbeat { nonce, .. }
             | Self::Hook { nonce, .. }
             | Self::ProviderState { nonce, .. }
+            | Self::ProviderRoute { nonce, .. }
             | Self::Gap { nonce, .. } => *nonce,
         }
     }
@@ -302,6 +387,7 @@ impl Frame {
             Self::Heartbeat { sequence, .. }
             | Self::Hook { sequence, .. }
             | Self::ProviderState { sequence, .. }
+            | Self::ProviderRoute { sequence, .. }
             | Self::Gap { sequence, .. } => Some(*sequence),
         }
     }
@@ -313,6 +399,7 @@ impl Frame {
             | Self::Heartbeat { generation, .. }
             | Self::Hook { generation, .. }
             | Self::ProviderState { generation, .. }
+            | Self::ProviderRoute { generation, .. }
             | Self::Gap { generation, .. } => Some(*generation),
         }
     }

@@ -25,7 +25,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, TryLockError,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -33,6 +33,7 @@ use std::{
 };
 use terminal::TerminalOwner;
 use thiserror::Error;
+use zmux_program_status::SessionEpoch;
 #[cfg(feature = "ghostty")]
 pub use zmux_terminal_adapter::GhosttyLimits;
 use zmux_terminal_adapter::{
@@ -42,8 +43,8 @@ pub use zmux_terminal_adapter::{Key, KeyAction, KeyEvent, PASTE_BYTES};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
 pub const INPUT_QUEUE_CHUNKS: usize = 16;
-/// Queue payload upper bound: sixteen whole paste events, plus one active event
-/// with at most twelve framing bytes. This is not total process memory accounting.
+/// Maximum payload admitted to the bounded input channel. The active write and
+/// deferred PTY ordering buffers are accounted separately.
 pub const MAX_QUEUED_INPUT_PAYLOAD_BYTES: usize = INPUT_QUEUE_CHUNKS * PASTE_BYTES;
 
 pub fn default_size() -> Size {
@@ -55,6 +56,24 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_WAIT: Duration = Duration::from_millis(250);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const EXIT_REAP_TIMEOUT: Duration = Duration::from_millis(200);
+const DEFAULT_CAUSAL_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+// The spill can hold one channel's worth of admitted events plus one refill.
+const MAX_DEFERRED_INPUT_EVENTS: usize = INPUT_QUEUE_CHUNKS * 2;
+// Preserve one channel payload, one active paste, and one raw input chunk worth
+// of PTY output while earlier writes drain; larger interleavings fail closed.
+const MAX_DEFERRED_OUTPUT_BYTES: usize =
+    MAX_QUEUED_INPUT_PAYLOAD_BYTES + PASTE_BYTES + INPUT_CHUNK_BYTES;
+const MAX_DEFERRED_ACTIONS: usize = MAX_DEFERRED_INPUT_EVENTS * 2 + 1;
+static NEXT_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+fn next_session_epoch() -> Result<SessionEpoch, SessionError> {
+    NEXT_SESSION_EPOCH
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |epoch| {
+            epoch.checked_add(1)
+        })
+        .map(SessionEpoch)
+        .map_err(|_| SessionError::Failure("session epoch space exhausted".into()))
+}
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -72,6 +91,8 @@ pub enum SessionError {
     Busy,
     #[error("session shutdown exceeded its deadline")]
     Timeout,
+    #[error("session status checkpoint was cancelled")]
+    Cancelled,
 }
 
 #[derive(Clone, Debug)]
@@ -131,6 +152,40 @@ pub struct Snapshot {
     pub bytes_read: u64,
     pub exit_code: Option<u32>,
     pub failure: Option<String>,
+}
+
+/// A worker-ordered terminal status checkpoint. Poll this handle from a
+/// coordinator loop; dropping it cancels work that has not reached the worker.
+pub struct ProgramStatusCheckpoint {
+    receiver: Receiver<Result<Arc<Snapshot>, SessionError>>,
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
+}
+
+impl ProgramStatusCheckpoint {
+    /// Returns `None` while the worker has not reached the ordering barrier.
+    /// Timeout and worker shutdown are reported as explicit errors.
+    pub fn try_recv(&mut self) -> Option<Result<Arc<Snapshot>, SessionError>> {
+        match self.receiver.try_recv() {
+            Ok(result) => Some(result),
+            Err(TryRecvError::Empty) if Instant::now() >= self.deadline => {
+                self.cancel();
+                Some(Err(SessionError::Timeout))
+            }
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err(SessionError::Closed)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for ProgramStatusCheckpoint {
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -276,10 +331,48 @@ enum Input {
     Scroll(i32),
     Wheel(Wheel),
     Pointer(Pointer),
+    ProgramStatusCheckpoint {
+        reply: SyncSender<Result<Arc<Snapshot>, SessionError>>,
+        cancelled: Arc<AtomicBool>,
+        deadline: Instant,
+    },
+}
+
+enum DeferredAction {
+    Input(Input),
+    Output {
+        bytes: Vec<u8>,
+        offset: usize,
+        ordering_deadline: Option<Instant>,
+    },
+}
+
+fn finish_input(input: Input, reason: InputWriteFailure) {
+    match input {
+        Input::Bytes { mut completion, .. } => {
+            if let Some(completion) = &mut completion {
+                completion.finish(Some(reason), false);
+            }
+        }
+        Input::ProgramStatusCheckpoint {
+            reply, cancelled, ..
+        } => {
+            if !cancelled.load(Ordering::Acquire) {
+                let _ = reply.try_send(Err(SessionError::Closed));
+            }
+        }
+        Input::Key(_)
+        | Input::Paste(_)
+        | Input::Scroll(_)
+        | Input::Wheel(_)
+        | Input::Pointer(_) => {}
+    }
 }
 
 struct Shared {
     stop: AtomicBool,
+    // Serializes queue admission against the worker's final pre-read check.
+    input_admission: Mutex<()>,
     close_deadline: Arc<Mutex<Option<Instant>>>,
     exited: AtomicBool,
     cleanup_failed: AtomicBool,
@@ -721,6 +814,11 @@ impl Session {
         completion: Option<WriteCompletion>,
         deadline: Option<Instant>,
     ) -> Result<(), SessionError> {
+        let admission = self
+            .shared
+            .input_admission
+            .lock()
+            .map_err(|_| SessionError::Failure("input admission lock poisoned".into()))?;
         self.input
             .try_send(Input::Bytes {
                 bytes: bytes.to_vec(),
@@ -731,6 +829,7 @@ impl Session {
                 TrySendError::Full(_) => SessionError::QueueFull,
                 TrySendError::Disconnected(_) => SessionError::Closed,
             })?;
+        drop(admission);
         // Enqueueing is the acknowledgment. A failed wake must not invite a duplicate resend;
         // the worker also checks queued work on its bounded idle timeout.
         if let Err(error) = self.wake() {
@@ -761,10 +860,16 @@ impl Session {
     }
     fn enqueue_event(&self, event: Input) -> Result<(), SessionError> {
         self.ensure_available()?;
+        let admission = self
+            .shared
+            .input_admission
+            .lock()
+            .map_err(|_| SessionError::Failure("input admission lock poisoned".into()))?;
         self.input.try_send(event).map_err(|e| match e {
             TrySendError::Full(_) => SessionError::QueueFull,
             TrySendError::Disconnected(_) => SessionError::Closed,
         })?;
+        drop(admission);
         if let Err(error) = self.wake() {
             eprintln!("zmux navigation accepted; scheduling wake failed: {error}");
         }
@@ -786,6 +891,43 @@ impl Session {
             .try_lock()
             .map(|s| Arc::clone(&s))
             .map_err(lock_error)
+    }
+
+    /// Request a status checkpoint ordered with PTY reads by the session worker.
+    /// The returned handle is nonblocking; its deadline bounds queueing and
+    /// parsing work, and dropping it cancels an unserviced request.
+    pub fn request_program_status_checkpoint(
+        &self,
+        deadline: Instant,
+    ) -> Result<ProgramStatusCheckpoint, SessionError> {
+        self.ensure_running()?;
+        if deadline <= Instant::now() {
+            return Err(SessionError::Timeout);
+        }
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let admission = self.shared.input_admission.try_lock().map_err(lock_error)?;
+        self.input
+            .try_send(Input::ProgramStatusCheckpoint {
+                reply,
+                cancelled: Arc::clone(&cancelled),
+                deadline,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => SessionError::QueueFull,
+                TrySendError::Disconnected(_) => SessionError::Closed,
+            })?;
+        drop(admission);
+        if let Err(error) = self.wake() {
+            eprintln!(
+                "program status checkpoint accepted; worker will poll its bounded queue: {error}"
+            );
+        }
+        Ok(ProgramStatusCheckpoint {
+            receiver,
+            cancelled,
+            deadline,
+        })
     }
 
     /// This is a nonblocking cancellation request, safe for an eventual native view teardown.
@@ -903,6 +1045,9 @@ struct Worker {
     process: ProcessGuard,
     terminal: TerminalOwner,
     input: Receiver<Input>,
+    deferred: VecDeque<DeferredAction>,
+    deferred_input_events: usize,
+    deferred_output_bytes: usize,
     shared: Arc<Shared>,
     bytes_read: u64,
     exit_code: Option<u32>,
@@ -912,6 +1057,8 @@ struct Worker {
     written: usize,
     pending_completion: Option<WriteCompletion>,
     pending_deadline: Option<Instant>,
+    pending_checkpoint: Option<PendingProgramStatusCheckpoint>,
+    checkpoint_read_drained: bool,
     shutdown_policy: ShutdownPolicy,
     close_deadline: Option<Instant>,
     engine_reply_timeout: Option<Duration>,
@@ -922,6 +1069,12 @@ struct Worker {
 struct CausalReply {
     batch: EngineBatch,
     written: usize,
+    deadline: Instant,
+}
+
+struct PendingProgramStatusCheckpoint {
+    reply: SyncSender<Result<Arc<Snapshot>, SessionError>>,
+    cancelled: Arc<AtomicBool>,
     deadline: Instant,
 }
 
@@ -960,7 +1113,12 @@ impl Worker {
         }
         let expected_open_nonce =
             open_request_registration.map(|registration| registration.nonce().adapter_value());
-        let terminal = TerminalOwner::new(launch.size, engine, expected_open_nonce)?;
+        let terminal = TerminalOwner::new(
+            launch.size,
+            engine,
+            expected_open_nonce,
+            next_session_epoch()?,
+        )?;
         // Export the first frame before a child can produce any terminal output.
         let viewport = terminal.viewport();
         let pair = native_pty_system()
@@ -1026,6 +1184,7 @@ impl Worker {
         drop(pair.slave);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            input_admission: Mutex::new(()),
             close_deadline,
             exited: AtomicBool::new(false),
             cleanup_failed: AtomicBool::new(false),
@@ -1039,6 +1198,12 @@ impl Worker {
             })),
             open_urls: Mutex::new(VecDeque::with_capacity(MAX_PROGRAM_OPEN_REQUESTS)),
         });
+        let mut deferred = VecDeque::new();
+        deferred
+            .try_reserve_exact(MAX_DEFERRED_ACTIONS)
+            .map_err(|_| {
+                SessionError::Failure("cannot reserve bounded PTY ordering queue".into())
+            })?;
         let worker = Self {
             master: Some(pair.master),
             io: Some(io),
@@ -1046,6 +1211,9 @@ impl Worker {
             process,
             terminal,
             input: input_rx,
+            deferred,
+            deferred_input_events: 0,
+            deferred_output_bytes: 0,
             shared: Arc::clone(&shared),
             bytes_read: 0,
             exit_code: None,
@@ -1055,9 +1223,13 @@ impl Worker {
             written: 0,
             pending_completion: None,
             pending_deadline: None,
+            pending_checkpoint: None,
+            checkpoint_read_drained: false,
             shutdown_policy,
             close_deadline: None,
-            engine_reply_timeout: engine.map(|options| options.reply_timeout),
+            engine_reply_timeout: Some(engine.map_or(DEFAULT_CAUSAL_REPLY_TIMEOUT, |options| {
+                options.reply_timeout
+            })),
             causal_reply: None,
             open_request_registration,
         };
@@ -1073,7 +1245,19 @@ impl Worker {
 
     fn execute(mut self) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let state = self.run()?;
+            let mut state = self.run()?;
+            if state == State::Exited {
+                let batch = self.terminal.attached_child_exited()?;
+                if !batch.replies().is_empty() {
+                    self.abort_engine();
+                    return Err(SessionError::Failure(
+                        "child-exit lifecycle unexpectedly requested a PTY reply".into(),
+                    ));
+                }
+                if !self.commit_batch(&batch)? {
+                    state = State::Closed;
+                }
+            }
             if state == State::Exited {
                 self.finish_inputs(InputWriteFailure::SessionExited);
                 // History retains only terminal state. Retire transport and the
@@ -1082,7 +1266,7 @@ impl Worker {
                 drop(self.master.take());
                 self.process.stop()?;
                 self.shared.exited.store(true, Ordering::Release);
-                self.publish(state, None);
+                self.publish(state, None, true)?;
                 self.review_history()?;
             }
             Ok::<State, SessionError>(state)
@@ -1091,12 +1275,30 @@ impl Worker {
         match result {
             Ok(Ok(state)) => {
                 self.finish_inputs(InputWriteFailure::SessionClosed);
-                self.publish(state, None);
+                let publication = if state == State::Closed {
+                    self.terminal
+                        .terminal_closed()
+                        .and_then(|viewport| self.publish_viewport(state, None, viewport))
+                } else {
+                    self.publish(state, None, true)
+                };
+                if let Err(error) = publication {
+                    eprintln!("zmux session final snapshot publication failed: {error}");
+                    if let Err(failure) =
+                        self.publish(State::Failed, Some(error.to_string()), false)
+                    {
+                        eprintln!("zmux session failure publication failed: {failure}");
+                    }
+                }
             }
             Ok(Err(error)) => {
                 self.abort_engine();
                 self.finish_inputs(InputWriteFailure::WorkerFailed);
-                self.publish(State::Failed, Some(error.to_string()));
+                if let Err(publish_error) =
+                    self.publish(State::Failed, Some(error.to_string()), false)
+                {
+                    eprintln!("zmux failed snapshot publication: {publish_error}");
+                }
             }
             Err(_) => {
                 self.abort_engine();
@@ -1161,6 +1363,9 @@ impl Worker {
                         return Ok(State::Closed);
                     }
                     ShutdownPolicy::Graceful { timeout } => {
+                        // The terminal was aborted above; retire any pre-close
+                        // dirty frame so the bounded drain uses idle polling.
+                        dirty = false;
                         if self.close_deadline.is_none() {
                             self.finish_inputs(InputWriteFailure::SessionClosed);
                             self.process.send_signal(Signal::SIGTERM)?;
@@ -1189,23 +1394,29 @@ impl Worker {
                     }
                 }
             }
-            if self.causal_reply.is_none() && self.close_deadline.is_none() {
-                let size = self
-                    .shared
-                    .resize
-                    .lock()
-                    .map_err(|_| SessionError::Failure("resize lock poisoned".into()))?
-                    .take();
-                if let Some(size) = size {
-                    // Stage engine geometry before the irreversible kernel resize.
-                    // Failure aborts; no rollback-atomicity claim is made.
-                    let staged = self.terminal.stages_mutations();
-                    let batch = if staged {
-                        self.terminal.resize(size)?
-                    } else {
-                        None
-                    };
-                    self.master
+            if self.causal_reply.is_none()
+                && self.close_deadline.is_none()
+                && self.pending.is_empty()
+            {
+                if !self.deferred.is_empty() {
+                    dirty |= self.advance_deferred()?;
+                } else {
+                    let size = self
+                        .shared
+                        .resize
+                        .lock()
+                        .map_err(|_| SessionError::Failure("resize lock poisoned".into()))?
+                        .take();
+                    if let Some(size) = size {
+                        // Stage engine geometry before the irreversible kernel resize.
+                        // Failure aborts; no rollback-atomicity claim is made.
+                        let staged = self.terminal.stages_mutations();
+                        let batch = if staged {
+                            self.terminal.resize(size)?
+                        } else {
+                            None
+                        };
+                        self.master
                         .as_ref()
                         .expect("active PTY master")
                         .resize(pty_size(size))
@@ -1214,14 +1425,19 @@ impl Worker {
                                 "resize PTY after engine stage: {error}; session recovery required"
                             ))
                         })?;
-                    let batch = if staged {
-                        batch
-                    } else {
-                        self.terminal.resize(size)?
-                    };
-                    dirty |= self.accept_batch(batch)?;
+                        let batch = if staged {
+                            batch
+                        } else {
+                            self.terminal.resize(size)?
+                        };
+                        dirty |= self.accept_batch(batch)?;
+                    }
+                    dirty |= self.load_input()?;
                 }
-                dirty |= self.load_input()?;
+            }
+            if self.service_pending_checkpoint()? {
+                dirty = false;
+                published = Instant::now();
             }
             // A zero-reply commit can observe cancellation during resize or
             // input's scroll-to-bottom. Reenter close handling before any user
@@ -1249,6 +1465,14 @@ impl Worker {
             {
                 return Err(self.reply_failure("deadline"));
             }
+            if self
+                .deferred_ordering_deadline()
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Err(SessionError::Failure(
+                    "causal PTY ordering deadline; session recovery required".into(),
+                ));
+            }
             if self.causal_reply.is_some() && self.process.poll_exit()? {
                 return Err(self.reply_failure("child exited before complete physical delivery"));
             }
@@ -1265,6 +1489,9 @@ impl Worker {
                         ));
                     }
                     Ok(count) => {
+                        if self.checkpoint_barrier_pending() {
+                            self.checkpoint_read_drained = false;
+                        }
                         self.written += count;
                         if let Some(completion) = &mut self.pending_completion {
                             completion.written = self.written;
@@ -1283,34 +1510,51 @@ impl Worker {
             }
             dirty |= self.advance_reply()?;
             let mut buffer = [0; IO_CHUNK_BYTES];
-            if !self.eof && self.causal_reply.is_none() {
+            if !self.eof
+                && self.causal_reply.is_none()
+                && (self.deferred.is_empty() || !self.pending.is_empty())
+            {
                 for _ in 0..READ_QUANTA {
                     if self.close_deadline.is_none() && self.shared.stop.load(Ordering::Acquire) {
                         break;
                     }
+                    let admission_lock = Arc::clone(&self.shared);
+                    let _admission = admission_lock.input_admission.lock().map_err(|_| {
+                        SessionError::Failure("input admission lock poisoned".into())
+                    })?;
+                    if self.close_deadline.is_none() && !self.checkpoint_barrier_pending() {
+                        self.capture_queued_inputs()?;
+                    }
                     match self.io.as_mut().expect("active PTY I/O").read(&mut buffer) {
                         Ok(0) => {
                             self.eof = true;
+                            if self.checkpoint_barrier_pending() {
+                                self.checkpoint_read_drained = true;
+                            }
                             break;
                         }
                         Ok(count) => {
+                            if self.checkpoint_barrier_pending() {
+                                self.checkpoint_read_drained = false;
+                            }
                             self.bytes_read += count as u64;
                             if self.close_deadline.is_none() {
-                                let batch = self.terminal.process(&buffer[..count])?;
-                                self.accept_batch(batch)?;
-                                // Publish read progress using only the last committed viewport.
-                                dirty = true;
-                                if self.causal_reply.is_some()
-                                    || self.shared.stop.load(Ordering::Acquire)
-                                {
-                                    break;
-                                }
+                                self.defer_output(&buffer[..count])?;
                             }
                         }
-                        Err(e) if retryable(&e) => break,
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            if self.checkpoint_barrier_pending() {
+                                self.checkpoint_read_drained = true;
+                            }
+                            break;
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => break,
                         // A native Unix PTY reports EIO after its slave closes.
                         Err(e) if e.raw_os_error() == Some(Errno::EIO as i32) => {
                             self.eof = true;
+                            if self.checkpoint_barrier_pending() {
+                                self.checkpoint_read_drained = true;
+                            }
                             break;
                         }
                         Err(e) => {
@@ -1334,10 +1578,14 @@ impl Worker {
                 });
                 self.exit_seen = Some(Instant::now());
             }
+            if self.service_pending_checkpoint()? {
+                dirty = false;
+                published = Instant::now();
+            }
             if self.exit_seen.is_some() && self.causal_reply.is_some() {
                 return Err(self.reply_failure("child exited before publication"));
             }
-            if self.exit_seen.is_some() && self.eof {
+            if self.exit_seen.is_some() && self.eof && self.deferred.is_empty() {
                 return Ok(if self.close_deadline.is_some() {
                     State::Closed
                 } else {
@@ -1350,10 +1598,23 @@ impl Worker {
                         .into(),
                 ));
             }
-            if dirty && published.elapsed() >= FRAME_INTERVAL {
-                self.publish(State::Running, None);
+            // Graceful close aborts the staged terminal but still drains PTY
+            // bytes for deadline and cleanup accounting. Do not refresh it.
+            if dirty
+                && self.close_deadline.is_none()
+                && self.causal_reply.is_none()
+                && published.elapsed() >= FRAME_INTERVAL
+            {
+                self.publish(State::Running, None, true)?;
                 dirty = false;
                 published = Instant::now();
+            }
+            if self.close_deadline.is_none()
+                && self.causal_reply.is_none()
+                && self.pending.is_empty()
+                && !self.deferred.is_empty()
+            {
+                continue;
             }
             if self.close_deadline.is_none() {
                 dirty |= self.load_input()?;
@@ -1396,6 +1657,21 @@ impl Worker {
             let timeout = self.causal_reply.as_ref().map_or(timeout, |reply| {
                 timeout.min(reply.deadline.saturating_duration_since(Instant::now()))
             });
+            let timeout = self
+                .deferred_ordering_deadline()
+                .map_or(timeout, |deadline| {
+                    timeout.min(deadline.saturating_duration_since(Instant::now()))
+                });
+            let timeout = self
+                .pending_checkpoint
+                .as_ref()
+                .map_or(timeout, |checkpoint| {
+                    timeout.min(
+                        checkpoint
+                            .deadline
+                            .saturating_duration_since(Instant::now()),
+                    )
+                });
             let timeout = self
                 .close_deadline
                 .filter(|_| self.exit_seen.is_none())
@@ -1445,11 +1721,23 @@ impl Worker {
                             completion.finish(Some(InputWriteFailure::SessionExited), false);
                         }
                     }
+                    Input::ProgramStatusCheckpoint {
+                        reply,
+                        cancelled,
+                        deadline,
+                    } => {
+                        let _ = self.process_program_status_checkpoint(
+                            reply,
+                            cancelled,
+                            deadline,
+                            State::Exited,
+                        )?;
+                    }
                     Input::Key(_) | Input::Paste(_) | Input::Pointer(_) => {}
                 }
             }
             if dirty {
-                self.publish(State::Exited, None);
+                self.publish(State::Exited, None, true)?;
             }
             let mut fds = [pollfd {
                 fd: self.wake.as_raw_file_descriptor(),
@@ -1481,62 +1769,337 @@ impl Worker {
         if !self.pending.is_empty()
             || self.causal_reply.is_some()
             || self.shared.stop.load(Ordering::Acquire)
+            || self.checkpoint_barrier_pending()
         {
             return Ok(false);
         }
-        for _ in 0..INPUT_QUEUE_CHUNKS {
-            let Ok(input) = self.input.try_recv() else {
-                break;
-            };
-            match input {
-                Input::Bytes {
-                    bytes,
-                    completion,
-                    deadline,
-                } => {
-                    if completion
-                        .as_ref()
-                        .is_some_and(|completion| !completion.start())
-                    {
-                        continue;
-                    }
-                    self.pending = bytes;
-                    self.written = 0;
-                    self.pending_completion = completion;
-                    self.pending_deadline = deadline;
-                    let batch = self.terminal.scroll(0)?;
-                    self.accept_batch(batch)?;
+        let Ok(input) = self.input.try_recv() else {
+            return Ok(false);
+        };
+        self.process_input(input)
+    }
+
+    fn process_input(&mut self, input: Input) -> Result<bool, SessionError> {
+        match input {
+            Input::ProgramStatusCheckpoint {
+                reply,
+                cancelled,
+                deadline,
+            } => self.schedule_program_status_checkpoint(reply, cancelled, deadline),
+            Input::Bytes {
+                bytes,
+                completion,
+                deadline,
+            } => {
+                if completion
+                    .as_ref()
+                    .is_some_and(|completion| !completion.start())
+                {
+                    return Ok(true);
                 }
-                Input::Scroll(lines) => {
-                    let batch = self.terminal.scroll(lines)?;
-                    self.accept_batch(batch)?;
-                }
-                Input::Key(event) => {
-                    self.pending = self.terminal.encode_key(event)?;
-                    self.written = 0;
-                    let batch = self.terminal.scroll(0)?;
-                    self.accept_batch(batch)?;
-                }
-                Input::Paste(text) => {
-                    self.pending = self.terminal.encode_paste(&text)?;
-                    self.written = 0;
-                    let batch = self.terminal.scroll(0)?;
-                    self.accept_batch(batch)?;
-                }
-                Input::Pointer(event) => {
-                    self.pending = self.terminal.pointer(event)?;
-                    self.written = 0;
-                }
-                Input::Wheel(event) => {
-                    let (bytes, batch) = self.terminal.wheel(event)?;
-                    self.pending = bytes;
-                    self.written = 0;
-                    self.accept_batch(batch)?;
-                }
+                self.pending = bytes;
+                self.written = 0;
+                self.pending_completion = completion;
+                self.pending_deadline = deadline;
+                let batch = self.terminal.scroll(0)?;
+                self.accept_batch(batch)
             }
+            Input::Scroll(lines) => {
+                let batch = self.terminal.scroll(lines)?;
+                self.accept_batch(batch)
+            }
+            Input::Key(event) => {
+                self.pending = self.terminal.encode_key(event)?;
+                self.written = 0;
+                let batch = self.terminal.scroll(0)?;
+                self.accept_batch(batch)
+            }
+            Input::Paste(text) => {
+                self.pending = self.terminal.encode_paste(&text)?;
+                self.written = 0;
+                let batch = self.terminal.scroll(0)?;
+                self.accept_batch(batch)
+            }
+            Input::Pointer(event) => {
+                let (bytes, batch) = self.terminal.pointer(event)?;
+                self.pending = bytes;
+                self.written = 0;
+                self.accept_batch(Some(batch))
+            }
+            Input::Wheel(event) => {
+                let (bytes, batch) = self.terminal.wheel(event)?;
+                self.pending = bytes;
+                self.written = 0;
+                self.accept_batch(Some(batch))
+            }
+        }
+    }
+
+    fn process_program_status_checkpoint(
+        &mut self,
+        reply: SyncSender<Result<Arc<Snapshot>, SessionError>>,
+        cancelled: Arc<AtomicBool>,
+        deadline: Instant,
+        state: State,
+    ) -> Result<bool, SessionError> {
+        if cancelled.load(Ordering::Acquire) {
+            let _ = reply.try_send(Err(SessionError::Cancelled));
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            let _ = reply.try_send(Err(SessionError::Timeout));
+            return Ok(false);
+        }
+        if let Err(error) = self.publish(state, None, true) {
+            let detail = error.to_string();
+            let _ = reply.try_send(Err(SessionError::Failure(detail)));
+            return Err(error);
+        }
+        if cancelled.load(Ordering::Acquire) {
+            let _ = reply.try_send(Err(SessionError::Cancelled));
             return Ok(true);
         }
+        let snapshot = self
+            .shared
+            .snapshot
+            .lock()
+            .map_err(|_| SessionError::Failure("session snapshot lock poisoned".into()))?
+            .clone();
+        let _ = reply.try_send(Ok(snapshot));
+        Ok(true)
+    }
+
+    fn schedule_program_status_checkpoint(
+        &mut self,
+        reply: SyncSender<Result<Arc<Snapshot>, SessionError>>,
+        cancelled: Arc<AtomicBool>,
+        deadline: Instant,
+    ) -> Result<bool, SessionError> {
+        if cancelled.load(Ordering::Acquire) {
+            let _ = reply.try_send(Err(SessionError::Cancelled));
+            return Ok(false);
+        }
+        if Instant::now() >= deadline {
+            let _ = reply.try_send(Err(SessionError::Timeout));
+            return Ok(false);
+        }
+        if self.pending_checkpoint.is_some() {
+            return Err(SessionError::Failure(
+                "overlapping worker status checkpoints; session recovery required".into(),
+            ));
+        }
+        self.pending_checkpoint = Some(PendingProgramStatusCheckpoint {
+            reply,
+            cancelled,
+            deadline,
+        });
+        self.checkpoint_read_drained = false;
         Ok(false)
+    }
+
+    fn service_pending_checkpoint(&mut self) -> Result<bool, SessionError> {
+        let Some(checkpoint) = self.pending_checkpoint.as_ref() else {
+            return Ok(false);
+        };
+        if checkpoint.cancelled.load(Ordering::Acquire) {
+            let checkpoint = self
+                .pending_checkpoint
+                .take()
+                .expect("pending checkpoint was just observed");
+            let _ = checkpoint.reply.try_send(Err(SessionError::Cancelled));
+            self.checkpoint_read_drained = false;
+            return Ok(false);
+        }
+        if Instant::now() >= checkpoint.deadline {
+            let checkpoint = self
+                .pending_checkpoint
+                .take()
+                .expect("pending checkpoint was just observed");
+            let _ = checkpoint.reply.try_send(Err(SessionError::Timeout));
+            self.checkpoint_read_drained = false;
+            return Ok(false);
+        }
+        if (!self.checkpoint_read_drained && !self.eof)
+            || !self.deferred.is_empty()
+            || !self.pending.is_empty()
+            || self.causal_reply.is_some()
+        {
+            return Ok(false);
+        }
+        let checkpoint = self
+            .pending_checkpoint
+            .take()
+            .expect("pending checkpoint was just observed");
+        self.checkpoint_read_drained = false;
+        self.process_program_status_checkpoint(
+            checkpoint.reply,
+            checkpoint.cancelled,
+            checkpoint.deadline,
+            // The run loop still owns final drain. Only execute() publishes
+            // Exited after committing attached-child-exit status retirement.
+            State::Running,
+        )
+    }
+
+    fn checkpoint_barrier_pending(&self) -> bool {
+        self.pending_checkpoint.is_some()
+            || self.deferred.iter().any(|action| {
+                matches!(
+                    action,
+                    DeferredAction::Input(Input::ProgramStatusCheckpoint { .. })
+                )
+            })
+    }
+
+    /// Snapshot all input admitted before one PTY read. The caller holds the
+    /// admission lock through that read, so later input remains behind its
+    /// resulting output in this ordered, bounded queue.
+    fn capture_queued_inputs(&mut self) -> Result<(), SessionError> {
+        loop {
+            let input = match self.input.try_recv() {
+                Ok(input) => input,
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
+            };
+            let checkpoint = matches!(&input, Input::ProgramStatusCheckpoint { .. });
+            if self.deferred_input_events >= MAX_DEFERRED_INPUT_EVENTS
+                || self.deferred.len() >= MAX_DEFERRED_ACTIONS
+                || self.deferred.try_reserve(1).is_err()
+            {
+                finish_input(input, InputWriteFailure::WorkerFailed);
+                return Err(SessionError::Failure(
+                    "deferred PTY input queue overflow; session recovery required".into(),
+                ));
+            }
+            self.deferred.push_back(DeferredAction::Input(input));
+            self.deferred_input_events += 1;
+            if checkpoint {
+                return Ok(());
+            }
+        }
+    }
+
+    fn defer_output(&mut self, bytes: &[u8]) -> Result<(), SessionError> {
+        if bytes.len() > MAX_DEFERRED_OUTPUT_BYTES.saturating_sub(self.deferred_output_bytes) {
+            return Err(SessionError::Failure(
+                "deferred PTY output exceeded its bounded ordering buffer; session recovery required"
+                    .into(),
+            ));
+        }
+        let ordering_deadline = if !self.pending.is_empty()
+            || self
+                .deferred
+                .iter()
+                .any(|action| matches!(action, DeferredAction::Input(_)))
+        {
+            Some(
+                Instant::now()
+                    + self.engine_reply_timeout.ok_or_else(|| {
+                        SessionError::Failure("missing explicit engine reply lifetime".into())
+                    })?,
+            )
+        } else {
+            None
+        };
+        match self.deferred.back_mut() {
+            Some(DeferredAction::Output { bytes: queued, .. }) => {
+                queued.try_reserve(bytes.len()).map_err(|_| {
+                    SessionError::Failure(
+                        "cannot reserve deferred PTY output; session recovery required".into(),
+                    )
+                })?;
+                queued.extend_from_slice(bytes);
+            }
+            _ => {
+                if self.deferred.len() >= MAX_DEFERRED_ACTIONS {
+                    return Err(SessionError::Failure(
+                        "deferred PTY action queue overflow; session recovery required".into(),
+                    ));
+                }
+                let mut queued = Vec::new();
+                queued.try_reserve_exact(bytes.len()).map_err(|_| {
+                    SessionError::Failure(
+                        "cannot reserve deferred PTY output; session recovery required".into(),
+                    )
+                })?;
+                queued.extend_from_slice(bytes);
+                self.deferred.push_back(DeferredAction::Output {
+                    bytes: queued,
+                    offset: 0,
+                    ordering_deadline,
+                });
+            }
+        }
+        self.deferred_output_bytes += bytes.len();
+        Ok(())
+    }
+
+    fn advance_deferred(&mut self) -> Result<bool, SessionError> {
+        match self.deferred.front() {
+            Some(DeferredAction::Input(_)) => {
+                let Some(DeferredAction::Input(input)) = self.deferred.pop_front() else {
+                    unreachable!("deferred input was just observed")
+                };
+                self.deferred_input_events =
+                    self.deferred_input_events.checked_sub(1).ok_or_else(|| {
+                        SessionError::Failure("deferred input count underflow".into())
+                    })?;
+                if self.exit_seen.is_some() {
+                    match input {
+                        Input::Scroll(lines) => self.history_scroll(lines)?,
+                        Input::Wheel(event) => self.history_scroll(event.lines)?,
+                        checkpoint @ Input::ProgramStatusCheckpoint { .. } => {
+                            return self.process_input(checkpoint);
+                        }
+                        other => finish_input(other, InputWriteFailure::SessionExited),
+                    }
+                    Ok(true)
+                } else {
+                    self.process_input(input)
+                }
+            }
+            Some(DeferredAction::Output { .. }) => {
+                if self.checkpoint_barrier_pending() && !self.eof {
+                    self.checkpoint_read_drained = false;
+                }
+                let mut chunk = [0; IO_CHUNK_BYTES];
+                let (length, finished) = match self.deferred.front_mut() {
+                    Some(DeferredAction::Output {
+                        bytes,
+                        offset,
+                        ordering_deadline,
+                    }) => {
+                        let length = (bytes.len() - *offset).min(IO_CHUNK_BYTES);
+                        chunk[..length].copy_from_slice(&bytes[*offset..*offset + length]);
+                        *offset += length;
+                        *ordering_deadline = None;
+                        (length, *offset == bytes.len())
+                    }
+                    _ => unreachable!("deferred output was just observed"),
+                };
+                self.deferred_output_bytes = self
+                    .deferred_output_bytes
+                    .checked_sub(length)
+                    .ok_or_else(|| {
+                        SessionError::Failure("deferred output count underflow".into())
+                    })?;
+                if finished {
+                    self.deferred.pop_front();
+                }
+                let batch = self.terminal.process(&chunk[..length])?;
+                self.accept_batch(batch)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn deferred_ordering_deadline(&self) -> Option<Instant> {
+        self.deferred.iter().find_map(|action| match action {
+            DeferredAction::Input(_) => None,
+            DeferredAction::Output {
+                ordering_deadline, ..
+            } => *ordering_deadline,
+        })
     }
 
     fn accept_batch(&mut self, batch: Option<EngineBatch>) -> Result<bool, SessionError> {
@@ -1698,27 +2261,58 @@ impl Worker {
         }
         self.pending.clear();
         self.pending_deadline = None;
-        for input in self.input.try_iter() {
-            if let Input::Bytes { mut completion, .. } = input
-                && let Some(completion) = &mut completion
-            {
-                completion.finish(Some(reason), false);
+        for action in self.deferred.drain(..) {
+            if let DeferredAction::Input(input) = action {
+                finish_input(input, reason);
             }
+        }
+        self.deferred_input_events = 0;
+        self.deferred_output_bytes = 0;
+        if let Some(checkpoint) = self.pending_checkpoint.take()
+            && !checkpoint.cancelled.load(Ordering::Acquire)
+        {
+            let _ = checkpoint.reply.try_send(Err(SessionError::Closed));
+        }
+        self.checkpoint_read_drained = false;
+        for input in self.input.try_iter() {
+            finish_input(input, reason);
         }
     }
 
-    fn publish(&self, state: State, failure: Option<String>) {
+    fn publish(
+        &mut self,
+        state: State,
+        failure: Option<String>,
+        refresh_viewport: bool,
+    ) -> Result<(), SessionError> {
+        if refresh_viewport {
+            self.terminal.refresh_viewport()?;
+        }
+        self.publish_viewport(state, failure, self.terminal.viewport())
+    }
+
+    fn publish_viewport(
+        &mut self,
+        state: State,
+        failure: Option<String>,
+        viewport: Viewport,
+    ) -> Result<(), SessionError> {
         let snapshot = Arc::new(Snapshot {
             state,
-            viewport: self.terminal.viewport(),
+            viewport,
             bytes_read: self.bytes_read,
             exit_code: self.exit_code,
             failure,
         });
         match self.shared.snapshot.lock() {
             Ok(mut slot) => *slot = snapshot,
-            Err(error) => eprintln!("zmux snapshot publication failed: {error}"),
+            Err(_) => {
+                return Err(SessionError::Failure(
+                    "session snapshot publication lock poisoned".into(),
+                ));
+            }
         }
+        Ok(())
     }
 }
 
@@ -1743,5 +2337,184 @@ fn pty_size(size: Size) -> PtySize {
         cols: size.cols,
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use std::{fs, io::Read, os::fd::AsRawFd, os::unix::net::UnixListener, path::PathBuf};
+
+    struct TestDirectory(PathBuf);
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn checkpoint_waits_for_preexisting_prompt_bytes_on_real_pty() {
+        checkpoint_with_preexisting_output(false);
+    }
+
+    #[test]
+    fn checkpoint_during_final_drain_keeps_pre_retirement_state() {
+        checkpoint_with_preexisting_output(true);
+    }
+
+    fn checkpoint_with_preexisting_output(child_exits: bool) {
+        let directory = TestDirectory(
+            std::env::temp_dir().join(format!("zmux-checkpoint-order-{}", uuid::Uuid::new_v4())),
+        );
+        fs::create_dir(&directory.0).expect("create checkpoint fixture directory");
+        let socket_path = directory.0.join("child-ready.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind child readiness socket");
+        let script_path = directory.0.join("child.py");
+        fs::write(
+            &script_path,
+            r#"import os,socket,sys,tty
+tty.setraw(0)
+payload=b'\x1b]133;A\x07B_PROMPT_READY\r\n\x1b]7501;state=working:id=final\x07'
+while payload:
+    payload=payload[os.write(1,payload):]
+notice=socket.socket(socket.AF_UNIX)
+notice.connect(sys.argv[1])
+notice.sendall(b'wrote')
+notice.close()
+if sys.argv[2]=='exit':
+    os._exit(0)
+os.read(0,1)
+"#,
+        )
+        .expect("write checkpoint child script");
+
+        let (input, input_receiver) = mpsc::sync_channel(INPUT_QUEUE_CHUNKS);
+        let launch = Launch {
+            program: "python3".into(),
+            args: vec![
+                "-u".into(),
+                script_path.to_string_lossy().into_owned(),
+                socket_path.to_string_lossy().into_owned(),
+                if child_exits { "exit" } else { "live" }.into(),
+            ],
+            cwd: None,
+            size: default_size(),
+        };
+        let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
+        let (start_worker, run_gate) = mpsc::sync_channel(1);
+        let worker_thread = thread::spawn(move || {
+            let (worker, startup) = Worker::start(
+                launch,
+                Vec::new(),
+                Vec::new(),
+                ShutdownPolicy::Kill,
+                None,
+                None,
+                input_receiver,
+            )
+            .expect("start real PTY worker");
+            startup_sender.send(startup).expect("return worker startup");
+            run_gate.recv().expect("release session worker");
+            worker.execute();
+        });
+        let startup = startup_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker did not complete PTY startup");
+
+        let mut notification_fds = [pollfd {
+            fd: listener.as_raw_fd(),
+            events: POLLIN,
+            revents: 0,
+        }];
+        assert!(matches!(
+            poll(&mut notification_fds, Some(Duration::from_secs(5))),
+            Ok(1)
+        ));
+        let (mut child_notice, _) = listener.accept().expect("accept child readiness notice");
+        let mut notice = [0; 5];
+        child_notice
+            .read_exact(&mut notice)
+            .expect("read child readiness notice");
+        assert_eq!(&notice, b"wrote");
+        if child_exits {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while child::observe_child(startup.process_id, false)
+                .expect("observe retained PTY child")
+                .is_none()
+            {
+                assert!(Instant::now() < deadline, "PTY child did not exit");
+                thread::yield_now();
+            }
+        }
+
+        // Hold the actual Session worker after its PTY child has written the
+        // prompt but before that worker can service an admitted checkpoint.
+        let mut session = Session {
+            input,
+            wake: Mutex::new(startup.wake),
+            shared: startup.shared,
+            worker: Some(worker_thread),
+            process_id: startup.process_id,
+            shutdown_policy: ShutdownPolicy::Kill,
+            application_wheel_supported: true,
+            open_request_registration: None,
+        };
+        let checkpoint = session
+            .request_program_status_checkpoint(Instant::now() + Duration::from_secs(5))
+            .expect("admit public checkpoint request");
+        start_worker.send(()).expect("start session worker");
+
+        let snapshot = checkpoint
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("checkpoint did not complete before its test deadline")
+            .expect("checkpoint failed");
+        assert!(snapshot.bytes_read > 0);
+        assert!(snapshot.viewport.contents.contains("B_PROMPT_READY"));
+        assert_eq!(snapshot.viewport.program_status.command_epoch.0, 1);
+        assert_eq!(snapshot.state, State::Running);
+        assert!(
+            snapshot
+                .viewport
+                .program_status
+                .records
+                .iter()
+                .any(|record| {
+                    record.id.as_ref() == "final"
+                        && record.state == zmux_program_status::State::Working
+                })
+        );
+        if child_exits {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let final_snapshot = loop {
+                match session.snapshot() {
+                    Ok(current) if current.state == State::Exited => break current,
+                    Ok(_) | Err(SessionError::Busy) => {}
+                    Err(error) => panic!("read final Session snapshot: {error}"),
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "final drain did not retire child"
+                );
+                thread::yield_now();
+            };
+            assert!(final_snapshot.viewport.program_status.records.is_empty());
+            assert!(
+                final_snapshot
+                    .viewport
+                    .program_status
+                    .transitions
+                    .iter()
+                    .any(|event| {
+                        event.id.as_ref() == "final"
+                            && event.cause == zmux_program_status::TransitionCause::ChildExit
+                    })
+            );
+        }
+
+        session
+            .shutdown(Duration::from_secs(3))
+            .expect("stop and join checkpoint worker");
     }
 }

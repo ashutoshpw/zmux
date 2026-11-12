@@ -10,6 +10,8 @@ import platform
 import shutil
 import sys
 
+from candidate_sets import HISTORICAL, VERSIONED_7501
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 
@@ -43,6 +45,8 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source-sha', required=True)
+    parser.add_argument('--candidate-set', choices=(HISTORICAL, VERSIONED_7501),
+                        default=HISTORICAL)
     args = parser.parse_args()
     if platform.system() != 'Darwin' or platform.machine() != 'arm64':
         parser.error('native host proof requires the pinned Darwin ARM64 lane')
@@ -69,8 +73,9 @@ def main():
         if run(['git', 'rev-parse', 'HEAD'], 'source') != args.source_sha:
             raise RuntimeError('native host source differs from the frozen caller')
         receipt['artifact_acceptance'] = json.loads(run(
-            [sys.executable, str(HERE / 'accept-linkage.py'), '--target',
-             'aarch64-apple-darwin', '--root', str(root)], 'accept-explicit-root'))
+            [sys.executable, str(HERE / 'accept-linkage.py'), '--candidate-set',
+             args.candidate_set, '--target', 'aarch64-apple-darwin', '--root', str(root)],
+            'accept-explicit-root'))
         run([sys.executable, 'scripts/build-macos-dev', '--architecture', 'host',
              '--with-ghostty', '--ghostty-artifact-root', str(root)], 'build-native-host', 600)
         archive = REPO / 'dist' / ('zmux-dev-arm64-' + args.source_sha[:7] + '.zip')
@@ -92,6 +97,7 @@ def main():
         # The app owns this exact PTY child. A failed fixture is finite even if
         # its parent dies before ordinary Session cleanup can run.
         environment.update(SHELL=str(child), ZMUX_ENGINE_SMOKE_ROOT=str(output),
+                           ZMUX_GHOSTTY_CANDIDATE_SET=args.candidate_set,
                            ZMUX_SOCKET=str(output / 'control.socket'),
                            ZMUX_TERMINAL_ENGINE=json.dumps(dict(engine='ghostty',
                                engine_bytes=16*1024*1024, general_bytes=16*1024*1024,

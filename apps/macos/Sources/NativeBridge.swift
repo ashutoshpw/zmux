@@ -356,6 +356,26 @@ actor NativeBridge {
         ]
         try await send(["command": "select_agent_target", "target": owner], acknowledged: true)
     }
+    /// Selects the existing terminal only while its exact program-status owner and
+    /// session/command epochs still contain the requested raw record ID.
+    func selectProgramTarget(_ target: ProgramSelectionTarget) async throws {
+        let owner: [String: Any] = [
+            "identity_namespace": target.identityNamespace.uuidString.lowercased(),
+            "window_id": target.windowId,
+            "window_uuid": target.windowUuid.uuidString.lowercased(),
+            "workspace_id": target.workspaceId,
+            "workspace_uuid": target.workspaceUuid.uuidString.lowercased(),
+            "pane_id": target.paneId,
+            "pane_uuid": target.paneUuid.uuidString.lowercased(),
+            "surface_id": target.surfaceId,
+            "surface_uuid": target.surfaceUuid.uuidString.lowercased(),
+            "session_id": target.sessionId,
+            "session_epoch": target.sessionEpoch,
+            "command_epoch": target.commandEpoch,
+            "id": target.id
+        ]
+        try await send(["command": "select_program_target", "target": owner], acknowledged: true)
+    }
     func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?, profile: UUID? = nil) async throws {
         var action: [String: Any] = ["action": name, "url": url]
         if let surface { action["surface_id"] = surface }

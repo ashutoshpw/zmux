@@ -12,6 +12,11 @@ import sys
 
 from darwin_platform import (CONSUMER_MINIMUM, LIBRARY_MINIMUM,
                              inspect_darwin_archive, inspect_macho)
+from candidate_sets import (HISTORICAL, VERSIONED_7501, load_source_manifest,
+                            canonical_digest,
+                            source_manifest_repo_path,
+                            source_manifest_file_sha256,
+                            validate_source_candidate_files)
 from verify import (HERE, REPO, Rejected, checked_file, digest, document,
                     read_bounded, verify_notice_review, verify_notices)
 
@@ -40,8 +45,22 @@ def deployment_policy():
     return policy
 
 
-def sources():
+def ensure_reuse_policy(candidate_set, reuse_artifacts):
+    if candidate_set != HISTORICAL and reuse_artifacts is not None:
+        raise Rejected("versioned Ghostty source candidates always build both slices without reuse")
+
+
+def sources(candidate_set=HISTORICAL):
     candidate = document(HERE / "candidate.json")
+    source_manifest_path = None
+    source_manifest = None
+    if candidate_set != HISTORICAL:
+        source_manifest_path, source_manifest = load_source_manifest(candidate_set)
+        validate_source_candidate_files(candidate_set, source_manifest)
+        if source_manifest.get("upstream_inputs_sha256") != candidate["upstream_inputs_sha256"]:
+            raise Rejected("versioned source candidate upstream input pin differs")
+        if source_manifest.get("recipe_sha256") != sha(HERE / "darwin-recipe.json"):
+            raise Rejected("versioned source candidate Darwin recipe pin differs")
     pins = document(BASE / "pins.json")
     recipe = document(HERE / "darwin-recipe.json")
     deployment_policy()
@@ -67,23 +86,49 @@ def sources():
         raise Rejected("Linux symbol baseline does not bind the retained reviewed artifact")
     paths = [p for p in HERE.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     paths += [REPO / name for name in candidate["repository_inputs_sha256"]]
+    if source_manifest is not None:
+        paths += [REPO / name for name in source_manifest["source_inputs_sha256"]]
+        paths.append(source_manifest_path)
     paths.append(WORKFLOW)
     frozen = {str(p.relative_to(REPO)): sha(p) for p in sorted(set(paths))}
-    return recipe, pins, frozen, symbols["symbols"]
+    if source_manifest is None:
+        patch_records = [{"path": "tools/terminal-feasibility/" + name,
+                          "recipe_name": name, "sha256": sha(BASE / name)}
+                         for name in ("resource.patch", "metadata.patch")]
+    else:
+        patch_records = [dict(patch, recipe_name=patch["path"])
+                         for patch in source_manifest["patches"]]
+    return recipe, pins, frozen, symbols["symbols"], source_manifest, patch_records
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--candidate-set", choices=(HISTORICAL, VERSIONED_7501),
+                        default=HISTORICAL,
+                        help="Select the historical recipe or an explicit versioned source candidate")
     parser.add_argument("--reuse-artifacts", type=Path,
                         help="Explicit prior output bundle/receipt; reuse only matching retained slices")
     parser.add_argument("--check-recipe", action="store_true",
                         help="Verify source/notice/recipe inputs without downloads or compilation")
     args = parser.parse_args()
+    try:
+        ensure_reuse_policy(args.candidate_set, args.reuse_artifacts)
+    except Rejected as error:
+        parser.error(str(error))
     if args.check_recipe:
-        recipe, _, frozen, _ = sources()
+        try:
+            recipe, _, frozen, _, source_manifest, patch_records = sources(args.candidate_set)
+        except (Rejected, OSError, ValueError, KeyError, TypeError) as error:
+            print(f"artifact candidate rejected: {error}", file=sys.stderr)
+            return 1
         print(json.dumps({"state": "recipe_verified", "recipe": recipe,
                           "deployment_policy": deployment_policy(),
+                          "candidate_set": args.candidate_set,
+                          "source_candidate": (None if source_manifest is None else {
+                              "path": source_manifest_repo_path(args.candidate_set),
+                              "sha256": source_manifest_file_sha256(args.candidate_set)}),
+                          "patches": patch_records,
                           "frozen_inputs": len(frozen), "engine_built": False,
                           "darwin_execution_verified": False}, indent=2))
         return 0
@@ -97,8 +142,15 @@ def main():
                    "minimum_os_execution_verified": False, "bit_identical_rebuild_verified": False,
                    "performance_measured": False}}
     try:
-        recipe, pins, frozen, linux_symbols = sources()
+        recipe, pins, frozen, linux_symbols, source_manifest, patch_records = sources(args.candidate_set)
         receipt.update(recipe=recipe, pins=pins, source_sha256=frozen)
+        if source_manifest is not None:
+            receipt["candidate_set"] = args.candidate_set
+            receipt["source_candidate"] = {
+                "candidate_set": args.candidate_set,
+                "path": source_manifest_repo_path(args.candidate_set),
+                "sha256": source_manifest_file_sha256(args.candidate_set),
+            }
         receipt["deployment_policy"] = deployment_policy()
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise Rejected("this recipe requires a macOS arm64 host; no cross-runtime substitution")
@@ -140,9 +192,14 @@ def main():
         # A nested Git root prevents git apply from silently skipping paths when
         # output is beneath an ignored directory of the caller's checkout.
         run(["git", "init", "--quiet"], "isolate-patch-root", cwd=source)
-        for patch in ("resource.patch", "metadata.patch"):
-            run(["git", "apply", "--check", str(BASE / patch)], patch + "-check", cwd=source)
-            run(["git", "apply", str(BASE / patch)], patch + "-apply", cwd=source)
+        for patch in patch_records:
+            patch_path = REPO / patch["path"]
+            label = Path(patch["path"]).name
+            run(["git", "apply", "--check", str(patch_path)], label + "-check", cwd=source)
+            run(["git", "apply", str(patch_path)], label + "-apply", cwd=source)
+        if source_manifest is not None:
+            for name, expected in source_manifest["post_patch_headers_sha256"].items():
+                checked_file(source, name, expected)
         override = receipt["deployment_policy"]["upstream_override"]
         override_source = checked_file(source, override["path"], override["sha256"])
         upstream = document(HERE / "upstream-inputs.json")
@@ -182,8 +239,10 @@ def main():
         shutil.copyfile(HERE / "evidence/notice-coverage-review.json", bundle / "notice-coverage-review.json")
         receipt["headers_sha256"] = {str(p.relative_to(bundle)): sha(p) for p in sorted((bundle / "include").rglob("*.h"))}
         receipt["library_recipe"] = {"recipe": recipe, "ghostty": pins["ghostty"], "zig": zig_pin,
-            "patches_sha256": {name: sha(BASE / name) for name in ("resource.patch", "metadata.patch")},
+            "patches_sha256": {patch["recipe_name"]: patch["sha256"] for patch in patch_records},
             "developer": receipt["developer"], "headers_sha256": receipt["headers_sha256"]}
+        if source_manifest is not None:
+            receipt["library_recipe_sha256"] = canonical_digest(receipt["library_recipe"])
         prior = None
         if args.reuse_artifacts:
             prior = document(args.reuse_artifacts.resolve() / "receipt.json")

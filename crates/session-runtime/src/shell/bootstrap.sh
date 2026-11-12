@@ -3,6 +3,10 @@
 # files after the interactive shell exits; the local Rust lease also cleans on kill.
 zmux_private_root=$1
 shift
+zmux_bash_rc_mode=$1
+shift
+zmux_user_bashrc=$1
+shift
 zmux_shell=$1
 shift
 case "${zmux_shell##*/}" in
@@ -57,9 +61,12 @@ elif [ -z "$zmux_private_root" ]; then
     zmux_private_root=$(mktemp -d "/tmp/zmux-shell.XXXXXXXX") || exit 70
 fi
 ZMUX_SHELL_INTEGRATION_DIRECTORY=$zmux_private_root
+ZMUX_USER_BASHRC_MODE=$zmux_bash_rc_mode
+ZMUX_USER_BASHRC=$zmux_user_bashrc
 export ZMUX_SHELL_INTEGRATION_DIRECTORY
+export ZMUX_USER_BASHRC_MODE ZMUX_USER_BASHRC
 zmux_shell_cleanup() {
-    rm -f "$zmux_private_root/claude.sh" "$zmux_private_root/claude.zsh" "$zmux_private_root/claude.fish" \
+    rm -f "$zmux_private_root/claude.sh" "$zmux_private_root/bashrc" "$zmux_private_root/claude.zsh" "$zmux_private_root/claude.fish" \
         "$zmux_private_root/provider.sh" "$zmux_private_root/provider.fish" \
         "$zmux_private_root/provider-launch.py" "$zmux_private_root/provider-opencode-plugin.js" \
         "$zmux_private_root/claude-lifecycle-hook.py" "$zmux_private_root/claude-lifecycle-notice.py" \
@@ -159,7 +166,7 @@ case "${zmux_shell##*/}" in
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude codex opencode zmux_refresh_openers; exec "$@"' zmux "$zmux_shell" "$@"
+        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude codex opencode zmux_refresh_openers zmux_program_status_prompt zmux_install_program_status_prompt; exec "$@"' zmux "$zmux_shell" --rcfile "$zmux_private_root/bashrc" "$@"
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}

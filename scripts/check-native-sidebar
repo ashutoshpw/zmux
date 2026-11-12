@@ -256,13 +256,16 @@ def main():
     report = dist / "native-sidebar.json"
     receipt = dist / "native-sidebar-process.json"
     lifecycle = dist / "native-sidebar-lifecycle.json"
+    program_report = dist / "native-sidebar-programs.json"
     agent_target = dist / "sidebar-agent-target.tmp.json"
     agent_fixture = dist / "native-sidebar-agent-fixture.json"
     status_report = dist / "native-status-menu.json"
     nonce = str(uuid.uuid4())
     screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png",
-                   dist / "zmux-sidebar-agents.png", dist / "zmux-status-icon.png"]
-    for path in [report, receipt, lifecycle, agent_target, agent_fixture, status_report, *screenshots]:
+                   dist / "zmux-sidebar-agents.png", dist / "zmux-sidebar-programs.png",
+                   dist / "zmux-status-icon.png"]
+    for path in [report, receipt, lifecycle, program_report, agent_target, agent_fixture,
+                 status_report, *screenshots]:
         path.unlink(missing_ok=True)
     # Keep the actual HOME for macOS services. Profile/session storage and the
     # socket are explicit generated fixture paths, never the user's app state.
@@ -361,6 +364,27 @@ def main():
         failed = [key for key in required if result.get(key) is not True]
         if failed:
             raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
+        if not program_report.is_file():
+            raise RuntimeError("Packaged OSC 7501 acceptance did not publish native-sidebar-programs.json")
+        program_result = json.loads(program_report.read_text())
+        if result.get("programs") != program_result:
+            raise RuntimeError("OSC 7501 acceptance receipt differs from the packaged sidebar report")
+        required_programs = (
+            "osc_7501_emitted_through_shell_pty", "program_status_exact_owner",
+            "program_status_available", "alert_feed_present", "focused_terminal_full_records",
+            "nonfocused_priority_summary",
+            "provider_status_coexistence", "program_selection_started_in_other_workspace",
+            "program_selection_exact_identity", "program_complete_inventory_unchanged",
+        )
+        failed_programs = [key for key in required_programs if program_result.get(key) is not True]
+        if failed_programs:
+            raise RuntimeError("OSC 7501 acceptance failed: " + ", ".join(failed_programs))
+        if (program_result.get("fixture_kind") != "literal_osc_7501_shell_pty_reports"
+                or not str(program_result.get("event_provenance", "")).startswith(
+                    "literal shell printf output through the packaged app PTY")
+                or program_result.get("audio_effect") !=
+                    "idle and working reports; no needs-user or completion transition was requested"):
+            raise RuntimeError("OSC 7501 fixture receipt does not identify its literal PTY and audio scope")
         status_result = json.loads(status_report.read_text())
         required_status = ("native_status_button", "system_menu_opened", "workspace_context_actions",
                            "captured_mutations", "cross_window_notification_open", "inbox_presentation",
@@ -383,6 +407,42 @@ def main():
                 or not isinstance(native_agents, list) or not isinstance(native_projection, list)
                 or not isinstance(native_selections, list) or not isinstance(fixture_agents, list)):
             raise RuntimeError("Agent lifecycle acceptance omitted provider projection or exact owner evidence")
+        program_owner = program_result.get("owner")
+        if not isinstance(program_owner, dict):
+            raise RuntimeError("OSC 7501 receipt omitted exact terminal and record ownership")
+        program_owner_keys = ("identity_namespace", "window_id", "window_uuid", "workspace_id",
+                              "workspace_uuid", "pane_id", "pane_uuid", "surface_id", "surface_uuid",
+                              "session_id")
+        if any(str(program_owner.get(key)).lower() != str(owner.get(key)).lower()
+               for key in program_owner_keys):
+            raise RuntimeError("OSC 7501 status and provider lifecycle records did not share the exact terminal owner")
+        if any(str(program_owner.get(key)).lower() != str(target.get(key)).lower()
+               for key in ("identity_namespace", "surface_id", "surface_uuid", "session_id")):
+            raise RuntimeError("OSC 7501 status owner differs from the published live PTY target")
+        if (program_owner.get("record_id") != "build/test"
+                or type(program_owner.get("session_epoch")) is not int
+                or program_owner.get("session_epoch", 0) < 1
+                or type(program_owner.get("command_epoch")) is not int
+                or program_owner.get("command_epoch", -1) < 0):
+            raise RuntimeError("OSC 7501 selection receipt omitted its exact record and epochs")
+        records = program_result.get("records")
+        if (not isinstance(records, list) or len(records) != 2
+                or records[0] != {"id": "", "state": "idle", "title": "Root"}
+                or records[1] != {"id": "build/test", "state": "working", "progress": 70, "title": "Tests"}
+                or program_result.get("availability") != "available"
+                or program_result.get("record_count") != 2
+                or program_result.get("records_complete") is not True
+                or program_result.get("omitted_records") != 0
+                or program_result.get("nonfocused_records_complete") is not False
+                or program_result.get("nonfocused_visible_record_count") != 1
+                or program_result.get("priority_summary_record_id") != "build/test"
+                or program_result.get("provider_count") != 3
+                or type(program_result.get("surface_count")) is not int
+                or program_result.get("surface_count", 0) < 1
+                or type(program_result.get("target_process_id")) is not int
+                or program_result.get("target_process_id", 0) <= 1
+                or program_result.get("changed_surface_ids") != []):
+            raise RuntimeError("OSC 7501 receipt omitted the two observed records or unchanged PTY inventory")
         if (agent_result.get("success") is not True
                 or agent_result.get("fixture_kind") != "synthetic_provider_lifecycle_inputs"
                 or agent_result.get("provider_processes_invoked") is not False
@@ -490,8 +550,9 @@ def main():
                 or owner.get("provider_label") != "Claude Code"
                 or owner.get("connection") != "connected"):
             raise RuntimeError("Existing Claude selection receipt no longer identifies its exact Working owner")
-        evidence.update(success=True, native=result, status_menu=status_result, agent_fixture=agent_result)
-        print("Native sidebar provider grouping, exact selection, complete PTY inventory, and packaged cleanup checks passed")
+        evidence.update(success=True, native=result, status_menu=status_result,
+                        agent_fixture=agent_result, programs=program_result)
+        print("Native sidebar provider and OSC 7501 grouping, exact selection, complete PTY inventory, and packaged cleanup checks passed")
     except Exception as error:
         evidence["error"] = str(error)
         raise

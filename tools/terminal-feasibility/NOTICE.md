@@ -54,3 +54,17 @@ does not import or translate cmux implementation. The original `metadata.c`/
 The pinned permissive OSC 9 semantic parser supplies ConEmu classification rather
 than a copied parser. Default constructors retain upstream metadata behavior.
 Receipts hash both patches separately and retain the upstream license check.
+
+`program-status-v0.4.patch` is an additional original MIT Zmux source supplement for
+the optional Ghostty owner. It applies after the unchanged `resource.patch` and
+`metadata.patch` against Ghostty commit `22fa134a07f5749edd9e92c6bc17d8aaf61843be`.
+The source archive SHA-256 is
+`a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f`; the supplement
+SHA-256 is `f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925`.
+It changes only `src/terminal/osc.zig`, `src/terminal/stream.zig`,
+`src/terminal/stream_terminal.zig` and `src/terminal/c/terminal.zig` in that source.
+It reuses the existing metadata callback ABI and leaves the versioned metadata
+header unchanged. The header produced by the frozen patches hashes to
+`127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c`. No third-party
+implementation or asset is copied into this supplement; the pinned Ghostty MIT
+license remains retained above.

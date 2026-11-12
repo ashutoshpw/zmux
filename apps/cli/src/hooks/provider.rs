@@ -50,6 +50,13 @@ enum ProviderName {
     OpenCode,
 }
 
+#[derive(Clone, Copy)]
+enum ProviderRouteSignal {
+    Started,
+    Ended,
+    Cancelled,
+}
+
 impl ProviderName {
     fn executable(self) -> &'static str {
         match self {
@@ -339,12 +346,59 @@ fn automatic_launch(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
+    let route_id = Uuid::new_v4();
+    let lifecycle_provider = match provider {
+        ProviderKind::Codex => LifecycleProvider::CodexLocal,
+        ProviderKind::OpenCode => LifecycleProvider::OpenCodeLocal,
+    };
+    if submit_provider_route(
+        &options,
+        &route,
+        lifecycle_provider,
+        route_id,
+        runtime,
+        generation,
+        ProviderRouteSignal::Started,
+    )
+    .is_err()
+    {
+        // A timed out start may still be queued in the executor. Submit its
+        // exact inverse before falling back so a late admission cannot shadow
+        // OSC alerts for this terminal command.
+        let _ = submit_provider_route(
+            &options,
+            &route,
+            lifecycle_provider,
+            route_id,
+            runtime,
+            generation,
+            ProviderRouteSignal::Cancelled,
+        );
+        stop_listener.store(true, Ordering::Release);
+        let _ = listener_thread.join();
+        let _ = fs::remove_dir_all(&runtime_dir);
+        return launch_untracked(
+            provider,
+            args,
+            "Desktop did not admit the pending provider route",
+        );
+    }
+
     // The provider spawn is attempted once. If it returns a child, every later
     // observer error is reported as unknown evidence and never starts a second
     // provider instance.
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let _ = submit_provider_route(
+                &options,
+                &route,
+                lifecycle_provider,
+                route_id,
+                runtime,
+                generation,
+                ProviderRouteSignal::Cancelled,
+            );
             stop_listener.store(true, Ordering::Release);
             let _ = listener_thread.join();
             let _ = fs::remove_dir_all(&runtime_dir);
@@ -364,6 +418,21 @@ fn automatic_launch(
         listener_stop: Arc::clone(&stop_listener),
         listener_lost,
     });
+    if submit_provider_route(
+        &options,
+        &route,
+        lifecycle_provider,
+        route_id,
+        runtime,
+        generation,
+        ProviderRouteSignal::Ended,
+    )
+    .is_err()
+    {
+        eprintln!(
+            "zmux: pending provider route retirement was unavailable; the Desktop will retire it at the next prompt or owner change"
+        );
+    }
     stop_listener.store(true, Ordering::Release);
     let _ = listener_thread.join();
     match fs::remove_dir_all(&runtime_dir) {
@@ -806,6 +875,54 @@ fn submit_observation(
     Ok(())
 }
 
+fn submit_provider_route(
+    options: &ClientOptions,
+    route: &Route,
+    provider: LifecycleProvider,
+    route_id: Uuid,
+    runtime: Uuid,
+    generation: Uuid,
+    signal: ProviderRouteSignal,
+) -> Result<(), CliError> {
+    let action = match signal {
+        ProviderRouteSignal::Started => LifecycleAction::ProviderRouteStarted {
+            target: target(route),
+            provider,
+            route_id,
+            runtime_id: runtime,
+            generation,
+        },
+        ProviderRouteSignal::Ended => LifecycleAction::ProviderRouteEnded {
+            target: target(route),
+            provider,
+            route_id,
+            runtime_id: runtime,
+            generation,
+        },
+        ProviderRouteSignal::Cancelled => LifecycleAction::ProviderRouteCancelled {
+            target: target(route),
+            provider,
+            route_id,
+            runtime_id: runtime,
+            generation,
+        },
+    };
+    let response = lifecycle_operation(
+        options,
+        Instant::now() + options.timeout.min(LIFECYCLE_BUDGET),
+        LifecycleRequest {
+            request_id: Uuid::new_v4(),
+            action,
+        },
+    )?;
+    if response["accepted"] != true {
+        return Err(CliError(
+            "desktop did not accept pending provider route".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) struct ProviderSessionEnd {
     provider: ProviderKind,
     session_id: String,
@@ -866,6 +983,97 @@ fn submit_session_end(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_route_submission_sends_exact_start_and_cleanup_actions() {
+        let directory = Path::new("/tmp")
+            .canonicalize()
+            .unwrap()
+            .join(format!("zprovider-route-{}", Uuid::new_v4().simple()));
+        fs::create_dir(&directory).unwrap();
+        let socket = directory.join("control.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let mut actions = Vec::new();
+            for expected in [
+                "provider_route_started",
+                "provider_route_ended",
+                "provider_route_cancelled",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+                stream.read_exact(&mut bytes).unwrap();
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                let action = &request["command"]["request"]["action"];
+                assert_eq!(request["command"]["method"], "agent_lifecycle");
+                assert_eq!(action["action"], expected);
+                assert_eq!(action["provider"], "codex_local");
+                actions.push(action.clone());
+                let response = json!({
+                    "version": CONTROL_VERSION,
+                    "request_id": request["request_id"],
+                    "ok": true,
+                    "result": {"accepted": true}
+                });
+                let response = serde_json::to_vec(&response).unwrap();
+                stream
+                    .write_all(&(response.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&response).unwrap();
+            }
+            actions
+        });
+        let options = ClientOptions {
+            socket,
+            timeout: Duration::from_secs(1),
+            password: None,
+        };
+        let route = Route {
+            namespace: Uuid::new_v4(),
+            surface: Uuid::new_v4(),
+            surface_id: SurfaceId(9),
+            session: 11,
+            terminal: ProcessIdentity {
+                pid: 13,
+                uid: 17,
+                parent_pid: 19,
+                start: [23, 29],
+                boot: "fixture".into(),
+                executable: PathBuf::from("/bin/sh"),
+            },
+        };
+        let provider = LifecycleProvider::CodexLocal;
+        let route_id = Uuid::new_v4();
+        let runtime = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        for signal in [
+            ProviderRouteSignal::Started,
+            ProviderRouteSignal::Ended,
+            ProviderRouteSignal::Cancelled,
+        ] {
+            submit_provider_route(
+                &options, &route, provider, route_id, runtime, generation, signal,
+            )
+            .unwrap();
+        }
+        let actions = server.join().unwrap();
+        for action in &actions {
+            assert_eq!(action["route_id"], route_id.to_string());
+            assert_eq!(action["runtime_id"], runtime.to_string());
+            assert_eq!(action["generation"], generation.to_string());
+            assert_eq!(
+                action["target"]["identity_namespace"],
+                route.namespace.to_string()
+            );
+            assert_eq!(action["target"]["surface_uuid"], route.surface.to_string());
+        }
+        assert_eq!(actions[0]["action"], "provider_route_started");
+        assert_eq!(actions[1]["action"], "provider_route_ended");
+        assert_eq!(actions[2]["action"], "provider_route_cancelled");
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn trickled_event_has_an_absolute_deadline_and_bounded_worker_shutdown() {

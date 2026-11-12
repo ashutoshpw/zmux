@@ -160,6 +160,63 @@ fn notification_token_wire_requires_one_destination_and_explicit_nullable_sessio
 }
 
 #[test]
+fn provider_and_osc_alert_sound_metadata_remain_distinct_in_native_requests() {
+    let (store, surface) = fixture();
+    let model = store.snapshot();
+    let session_id = model.workspaces[0].root.panes()[0]
+        .selected()
+        .session_id
+        .unwrap();
+    let mut attention = Attention::default();
+    attention
+        .notify_agent_event(
+            &model,
+            surface,
+            session_id,
+            "completed",
+            "provider-event-1",
+            &content("Provider finished"),
+        )
+        .unwrap();
+    attention
+        .notify_program_status_event(
+            &model,
+            surface,
+            session_id,
+            "needs_user",
+            "osc-event-1",
+            &content("Program needs input"),
+        )
+        .unwrap();
+
+    let snapshot = attention.native_snapshot(&model);
+    let requests = serde_json::to_value(&snapshot.desired).unwrap();
+    let provider = snapshot
+        .desired
+        .iter()
+        .find(|request| request.alert_sound_source.as_deref() == Some("agent_lifecycle"))
+        .unwrap();
+    let program = snapshot
+        .desired
+        .iter()
+        .find(|request| request.alert_sound_source.as_deref() == Some("osc7501"))
+        .unwrap();
+    assert_eq!(provider.alert_sound_kind.as_deref(), Some("completed"));
+    assert_eq!(program.alert_sound_kind.as_deref(), Some("needs_user"));
+    let wire_requests = requests.as_array().unwrap();
+    assert!(
+        wire_requests
+            .iter()
+            .any(|request| request["alert_sound_source"] == "agent_lifecycle")
+    );
+    assert!(
+        wire_requests
+            .iter()
+            .any(|request| request["alert_sound_source"] == "osc7501")
+    );
+}
+
+#[test]
 fn workspace_native_tokens_require_the_exact_live_workspace_namespace_and_epoch() {
     let (mut store, _) = fixture();
     let workspace = store.snapshot().workspaces[0].id;

@@ -85,10 +85,17 @@ pub enum Message {
 }
 
 #[derive(Clone, Copy)]
-struct ReceiptCommand {
-    binding: Binding,
-    event_id: Uuid,
-    disposition: HookDisposition,
+enum ClientCommand {
+    HookReceipt {
+        binding: Binding,
+        event_id: Uuid,
+        disposition: HookDisposition,
+    },
+    ProviderRouteReceipt {
+        binding: Binding,
+        route_id: Uuid,
+        accepted: bool,
+    },
 }
 
 /// Lifecycle side-channel ownership attached to one exact terminal launch.
@@ -96,7 +103,7 @@ struct ReceiptCommand {
 pub struct Stream {
     binding: Arc<Mutex<Binding>>,
     cancellation: Arc<AtomicBool>,
-    receipt_sender: SyncSender<ReceiptCommand>,
+    receipt_sender: SyncSender<ClientCommand>,
 }
 
 impl Stream {
@@ -163,10 +170,31 @@ impl Stream {
             return false;
         }
         self.receipt_sender
-            .try_send(ReceiptCommand {
+            .try_send(ClientCommand::HookReceipt {
                 binding,
                 event_id,
                 disposition,
+            })
+            .is_ok()
+    }
+
+    /// Queue a route admission receipt without blocking the desktop executor.
+    /// `true` means only that the bounded local queue accepted it; it does not
+    /// prove that the remote wrapper received the receipt.
+    pub fn send_provider_route_receipt(
+        &self,
+        binding: Binding,
+        route_id: Uuid,
+        accepted: bool,
+    ) -> bool {
+        if route_id.is_nil() || self.binding() != binding {
+            return false;
+        }
+        self.receipt_sender
+            .try_send(ClientCommand::ProviderRouteReceipt {
+                binding,
+                route_id,
+                accepted,
             })
             .is_ok()
     }
@@ -386,7 +414,7 @@ fn supervise(
     mut binding: Binding,
     shared_binding: Arc<Mutex<Binding>>,
     sender: SyncSender<Message>,
-    receipt_receiver: Receiver<ReceiptCommand>,
+    receipt_receiver: Receiver<ClientCommand>,
     cancellation: &AtomicBool,
 ) -> Result<(), String> {
     let mut connected = false;
@@ -534,7 +562,7 @@ fn run_attempt(
     nonce: OpenRequestNonce,
     state: &mut AttemptState<'_>,
     sender: SyncSender<Message>,
-    receipt_receiver: &Receiver<ReceiptCommand>,
+    receipt_receiver: &Receiver<ClientCommand>,
     cancellation: &AtomicBool,
     first_handshake_deadline: Option<Instant>,
 ) -> Result<(), String> {
@@ -729,7 +757,8 @@ fn run_attempt(
                             }
                             Frame::Heartbeat { sequence, .. }
                             | Frame::Hook { sequence, .. }
-                            | Frame::ProviderState { sequence, .. } => {
+                            | Frame::ProviderState { sequence, .. }
+                            | Frame::ProviderRoute { sequence, .. } => {
                                 if !active_seen
                                     || *sequence == 0
                                     || last_sequence.checked_add(1) != Some(*sequence)
@@ -779,6 +808,7 @@ fn _protocol_type_anchor(_: Frame) {}
 enum ClientFrameKind {
     Activate,
     Receipt,
+    ProviderRouteReceipt,
 }
 
 struct PendingClientWrite {
@@ -837,7 +867,7 @@ fn write_pending_client_frame(
 }
 
 fn take_next_receipt(
-    receiver: &Receiver<ReceiptCommand>,
+    receiver: &Receiver<ClientCommand>,
     binding: Binding,
 ) -> Result<Option<PendingClientWrite>, String> {
     loop {
@@ -845,20 +875,38 @@ fn take_next_receipt(
             Ok(command) => command,
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(None),
         };
-        if command.binding != binding || command.event_id.is_nil() {
-            continue;
-        }
-        return PendingClientWrite::new(
-            &ClientFrame::Receipt {
-                version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
-                nonce: binding.nonce,
-                generation: binding.generation,
-                event_id: command.event_id,
-                disposition: command.disposition,
-            },
-            ClientFrameKind::Receipt,
-        )
-        .map(Some);
+        let (frame, kind) = match command {
+            ClientCommand::HookReceipt {
+                binding: command_binding,
+                event_id,
+                disposition,
+            } if command_binding == binding && !event_id.is_nil() => (
+                ClientFrame::Receipt {
+                    version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                    nonce: binding.nonce,
+                    generation: binding.generation,
+                    event_id,
+                    disposition,
+                },
+                ClientFrameKind::Receipt,
+            ),
+            ClientCommand::ProviderRouteReceipt {
+                binding: command_binding,
+                route_id,
+                accepted,
+            } if command_binding == binding && !route_id.is_nil() => (
+                ClientFrame::ProviderRouteReceipt {
+                    version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                    nonce: binding.nonce,
+                    generation: binding.generation,
+                    route_id,
+                    accepted,
+                },
+                ClientFrameKind::ProviderRouteReceipt,
+            ),
+            _ => continue,
+        };
+        return PendingClientWrite::new(&frame, kind).map(Some);
     }
 }
 
@@ -873,15 +921,76 @@ mod tests {
         sync::atomic::AtomicUsize,
         sync::mpsc::TryRecvError,
     };
+    use zmux_program_status::{
+        CommandEpoch, ProgramStatusSnapshot, Record, SessionEpoch, State, Transition,
+        TransitionCause, TransitionCursor,
+    };
     use zmux_remote_runtime::SshDescriptor;
     use zmux_remote_runtime::agent_lifecycle::ProviderKind;
     use zmux_session_runtime::{
         Launch, Session, ShutdownPolicy,
         shell_integration::{OpenRequestNonce, OpenRequestRegistration, OpenRequestSource},
     };
+    use zmux_terminal_adapter::{Size, Terminal};
     use zmux_workspace_core::{
         Action as WorkspaceAction, SessionId, SurfaceId, WorkspaceStore, targets::TargetKind,
     };
+
+    #[test]
+    fn provider_route_admission_ack_uses_the_exact_live_stream_binding() {
+        let binding = Binding {
+            target: crate::agent_lifecycle::Target {
+                identity_namespace: Uuid::new_v4(),
+                surface_id: SurfaceId(3),
+                surface_uuid: Uuid::new_v4(),
+                session_id: SessionId(5),
+            },
+            launch_id: 7,
+            runtime_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            nonce: Uuid::new_v4(),
+        };
+        let (receipt_sender, receipt_receiver) = sync_channel(MAX_PENDING_RECEIPTS);
+        let stream = Stream {
+            binding: Arc::new(Mutex::new(binding)),
+            cancellation: Arc::new(AtomicBool::new(false)),
+            receipt_sender,
+        };
+
+        for accepted in [true, false] {
+            let route_id = Uuid::new_v4();
+            assert!(stream.send_provider_route_receipt(binding, route_id, accepted));
+            let pending = take_next_receipt(&receipt_receiver, binding)
+                .unwrap()
+                .unwrap();
+            let frame: ClientFrame = serde_json::from_slice(&pending.bytes).unwrap();
+            assert!(matches!(
+                frame,
+                ClientFrame::ProviderRouteReceipt {
+                    version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                    nonce,
+                    generation,
+                    route_id: received_route,
+                    accepted: received,
+                } if nonce == binding.nonce
+                    && generation == binding.generation
+                    && received_route == route_id
+                    && received == accepted
+            ));
+            assert_eq!(pending.kind, ClientFrameKind::ProviderRouteReceipt);
+        }
+
+        let stale_binding = Binding {
+            generation: Uuid::new_v4(),
+            ..binding
+        };
+        assert!(!stream.send_provider_route_receipt(stale_binding, Uuid::new_v4(), true));
+        assert!(
+            take_next_receipt(&receipt_receiver, binding)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     const FIXTURE_DRIVER: &str = r#"
 import importlib.util
@@ -913,12 +1022,12 @@ def send(frame):
     sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
-send({"kind": "hello", "version": 3, "nonce": nonce})
+send({"kind": "hello", "version": 4, "nonce": nonce})
 activation = json.loads(sys.stdin.buffer.readline(4097))
-if activation.get("kind") != "activate" or activation.get("version") != 3 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
+if activation.get("kind") != "activate" or activation.get("version") != 4 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
     sys.exit(70)
 generation = activation["generation"]
-send({"kind": "active", "version": 3, "nonce": nonce, "generation": generation})
+send({"kind": "active", "version": 4, "nonce": nonce, "generation": generation})
 
 # Never read receipts. Keep the independent stdout path alive so the local
 # owner can distinguish stdin backpressure from peer exit or heartbeat expiry.
@@ -926,7 +1035,7 @@ sequence = 0
 try:
     while True:
         sequence += 1
-        send({"kind": "heartbeat", "version": 3, "nonce": nonce, "generation": generation, "sequence": sequence})
+        send({"kind": "heartbeat", "version": 4, "nonce": nonce, "generation": generation, "sequence": sequence})
         time.sleep(0.1)
 except BrokenPipeError:
     pass
@@ -943,12 +1052,12 @@ def send(frame):
     sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
     sys.stdout.flush()
 
-send({"kind": "hello", "version": 3, "nonce": nonce_text})
+send({"kind": "hello", "version": 4, "nonce": nonce_text})
 activation = json.loads(sys.stdin.buffer.readline(4097))
-if activation.get("kind") != "activate" or activation.get("version") != 3 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
+if activation.get("kind") != "activate" or activation.get("version") != 4 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
     sys.exit(70)
 generation = activation["generation"]
-send({"kind": "active", "version": 3, "nonce": nonce_text, "generation": generation})
+send({"kind": "active", "version": 4, "nonce": nonce_text, "generation": generation})
 
 observation = {
     "provider": "codex",
@@ -962,12 +1071,79 @@ observation = {
 for sequence in (1, 3):
     send({
         "kind": "provider_state",
-        "version": 3,
+        "version": 4,
         "nonce": nonce_text,
         "generation": generation,
         "sequence": sequence,
         "observation": observation,
     })
+"#;
+
+    const PROVIDER_ROUTE_RECONNECT_PEER: &str = r#"
+import json
+import os
+import sys
+import time
+import uuid
+
+nonce = uuid.UUID(sys.argv[1]).hex
+nonce_text = str(uuid.UUID(hex=nonce))
+marker = __file__ + ".route-start-sent"
+try:
+    descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(descriptor)
+    first_attempt = True
+except FileExistsError:
+    first_attempt = False
+
+def send(frame):
+    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+send({"kind": "hello", "version": 4, "nonce": nonce_text})
+activation = json.loads(sys.stdin.buffer.readline(4097))
+if activation.get("kind") != "activate" or activation.get("version") != 4 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
+    sys.exit(70)
+generation = activation["generation"]
+send({"kind": "active", "version": 4, "nonce": nonce_text, "generation": generation})
+
+sequence = 0
+if first_attempt:
+    sequence = 1
+    send({
+        "kind": "provider_route",
+        "version": 4,
+        "nonce": nonce_text,
+        "generation": generation,
+        "sequence": sequence,
+        "provider": "codex",
+        "route_id": str(uuid.uuid4()),
+        "provider_generation": str(uuid.uuid4()),
+        "phase": "starting",
+    })
+    # Keep the old stream alive long enough for the desktop owner to enqueue
+    # its exact route receipt. This peer intentionally never reads that receipt.
+    time.sleep(0.5)
+    send({
+        "kind": "heartbeat",
+        "version": 4,
+        "nonce": nonce_text,
+        "generation": generation,
+        "sequence": sequence + 2,
+    })
+    while True:
+        time.sleep(1)
+else:
+    while True:
+        sequence += 1
+        send({
+            "kind": "heartbeat",
+            "version": 4,
+            "nonce": nonce_text,
+            "generation": generation,
+            "sequence": sequence,
+        })
+        time.sleep(0.1)
 "#;
 
     const INSTALLED_LIFECYCLE_SCRIPT: &str =
@@ -1745,6 +1921,315 @@ for sequence in (1, 3):
 
         drop(stream);
         drop(session);
+        drop(fixture);
+    }
+
+    #[test]
+    fn managed_ssh_replacement_retires_a_route_whose_receipt_peer_never_reads() {
+        if !private_ssh_prerequisites_available() {
+            eprintln!(
+                "skipping provider route reconnect test: private SSH prerequisites unavailable"
+            );
+            return;
+        }
+
+        let fixture = SshFixture::start();
+        let connection = fixture.connection();
+        let nonce = OpenRequestNonce::generate();
+        let namespace = Uuid::new_v4();
+        let mut store = WorkspaceStore::with_identity_namespace(namespace);
+        store
+            .apply(WorkspaceAction::CreateSshWorkspace {
+                name: "provider route reconnect".into(),
+                connection: zmux_remote_runtime::SshConnectionConfig {
+                    destination: "fixture@example.test".into(),
+                    config_file: None,
+                    port: None,
+                    identity: None,
+                    forward_agent: None,
+                    ssh_options: Vec::new(),
+                    jump_hosts: Vec::new(),
+                    command: None,
+                },
+                focus: true,
+            })
+            .expect("create exact remote owner for the route policy");
+        let model = store.snapshot();
+        let surface = model.workspaces[0].root.panes()[0].selected();
+        let session_id = surface.session_id.expect("remote workspace session");
+        let target = Target {
+            identity_namespace: namespace,
+            surface_id: surface.id,
+            surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+            session_id,
+        };
+
+        let registration = OpenRequestRegistration::new(nonce, OpenRequestSource::ManagedSsh);
+        let terminal = connection.terminal_spec(&nonce);
+        let mut session = Session::spawn_with_open_requests(
+            Launch {
+                program: terminal.program,
+                args: terminal.args,
+                cwd: None,
+                size: zmux_session_runtime::default_size(),
+            },
+            &[],
+            &[],
+            ShutdownPolicy::Kill,
+            None,
+            Some(registration),
+            Arc::clone(&connection),
+        )
+        .expect("spawn managed SSH terminal for the route reconnect test");
+
+        let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
+        while !bootstrap_started.exists() {
+            let snapshot = session_snapshot_before(
+                &session,
+                bootstrap_deadline,
+                "inspect route reconnect SSH bootstrap",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before route reconnect setup: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < bootstrap_deadline,
+                "managed SSH terminal did not enter the route reconnect bootstrap gate"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(fixture.remote_root.join(".release-bootstrap"), b"go")
+            .expect("release the route reconnect bootstrap");
+
+        let integration_root = PathBuf::from(nonce.remote_integration_directory());
+        let lifecycle_script = integration_root.join("claude-lifecycle-stream.py");
+        let expected_script = format!("{INSTALLED_LIFECYCLE_SCRIPT}\n");
+        let install_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if fs::read_to_string(&lifecycle_script).ok().as_deref()
+                == Some(expected_script.as_str())
+            {
+                break;
+            }
+            let snapshot = session_snapshot_before(
+                &session,
+                install_deadline,
+                "inspect route reconnect lifecycle helper install",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before lifecycle helper install: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < install_deadline,
+                "managed SSH terminal did not install its lifecycle helper"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&lifecycle_script, PROVIDER_ROUTE_RECONNECT_PEER)
+            .expect("install framed provider route reconnect peer");
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let stream = Stream::start(Arc::clone(&connection), nonce, target, 1, sender)
+            .expect("start managed provider route stream");
+        let first_binding = wait_stream_connected(&receiver);
+
+        let status_frame = |status: ProgramStatusSnapshot| {
+            let mut viewport = Terminal::new(Size { rows: 24, cols: 80 })
+                .expect("create policy terminal viewport")
+                .viewport();
+            viewport.program_status = status;
+            crate::Frame {
+                session_id,
+                process_id: Some(1),
+                starting: false,
+                reconnectable: false,
+                snapshot: Some(Arc::new(zmux_session_runtime::Snapshot {
+                    state: zmux_session_runtime::State::Running,
+                    viewport,
+                    bytes_read: 0,
+                    exit_code: None,
+                    failure: None,
+                })),
+                failure: None,
+            }
+        };
+        let mut policy = crate::program_status::Runtime::default();
+        policy.observe(
+            &model,
+            &[status_frame(ProgramStatusSnapshot {
+                session_epoch: SessionEpoch(71),
+                command_epoch: CommandEpoch(0),
+                cursor: TransitionCursor(0),
+                dropped_through: None,
+                records: Vec::new(),
+                transitions: Vec::new(),
+            })],
+            Instant::now(),
+        );
+
+        let route_message = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("real SSH fixture should emit a framed provider route start");
+        let (route_provider, route_id, provider_generation) = match route_message {
+            Message::Frame {
+                binding,
+                frame:
+                    zmux_remote_runtime::agent_lifecycle::Frame::ProviderRoute {
+                        provider,
+                        route_id,
+                        provider_generation,
+                        phase: zmux_remote_runtime::agent_lifecycle::ProviderRoutePhase::Starting,
+                        sequence,
+                        ..
+                    },
+            } => {
+                assert_eq!(binding, first_binding);
+                assert_eq!(sequence, 1);
+                (provider, route_id, provider_generation)
+            }
+            _ => panic!("expected the real framed provider route start"),
+        };
+        let first_transport = crate::program_status::TransportOwner {
+            runtime_id: first_binding.runtime_id,
+            generation: first_binding.generation,
+        };
+        policy
+            .add_provider_route(
+                &model,
+                crate::program_status::ProviderRouteStart {
+                    target,
+                    provider: crate::agent_lifecycle::Provider::for_transport(route_provider, true),
+                    route_id,
+                    runtime_id: first_binding.runtime_id,
+                    generation: provider_generation,
+                    session_epoch: SessionEpoch(71),
+                    command_epoch: CommandEpoch(0),
+                    cursor: TransitionCursor(0),
+                    transport: Some(first_transport),
+                },
+            )
+            .expect("bind route start to the exact remote owner and stream generation");
+
+        assert!(stream.send_provider_route_receipt(first_binding, route_id, true));
+        let reserved_alerts = policy.observe(
+            &model,
+            &[status_frame(ProgramStatusSnapshot {
+                session_epoch: SessionEpoch(71),
+                command_epoch: CommandEpoch(0),
+                cursor: TransitionCursor(1),
+                dropped_through: None,
+                records: vec![Record {
+                    id: "reserved".into(),
+                    state: State::Blocked,
+                    kind: None,
+                    progress: None,
+                    app: Some("fixture".into()),
+                    effective_app: None,
+                    msg: Some("Waiting for approval".into()),
+                    title: Some("Waiting".into()),
+                }],
+                transitions: vec![Transition {
+                    cursor: TransitionCursor(1),
+                    command_epoch: CommandEpoch(0),
+                    id: "reserved".into(),
+                    before_state: None,
+                    after_record: Some(Record {
+                        id: "reserved".into(),
+                        state: State::Blocked,
+                        kind: None,
+                        progress: None,
+                        app: Some("fixture".into()),
+                        effective_app: None,
+                        msg: Some("Waiting for approval".into()),
+                        title: Some("Waiting".into()),
+                    }),
+                    cause: TransitionCause::Report,
+                }],
+            })],
+            Instant::now(),
+        );
+        assert!(reserved_alerts.is_empty());
+
+        match receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("gapped old stream should report loss")
+        {
+            Message::Lost { binding } => assert_eq!(binding, first_binding),
+            _ => panic!("expected loss of the route's original stream generation"),
+        }
+
+        let second_binding = loop {
+            match receiver.recv_timeout(Duration::from_secs(10)) {
+                Ok(Message::Connected {
+                    binding,
+                    previous_generation,
+                }) => {
+                    assert_eq!(previous_generation, Some(first_binding.generation));
+                    break binding;
+                }
+                Ok(Message::Frame { .. }) => {}
+                Ok(Message::Lost { binding }) => {
+                    assert_eq!(binding, first_binding);
+                }
+                Err(error) => panic!("managed SSH stream did not replace its generation: {error}"),
+            }
+        };
+        assert_ne!(second_binding.generation, first_binding.generation);
+        policy.retire_transport_routes(target, first_transport);
+
+        let alerts = policy.observe(
+            &model,
+            &[status_frame(ProgramStatusSnapshot {
+                session_epoch: SessionEpoch(71),
+                command_epoch: CommandEpoch(0),
+                cursor: TransitionCursor(2),
+                dropped_through: None,
+                records: vec![Record {
+                    id: "after-reconnect".into(),
+                    state: State::Blocked,
+                    kind: None,
+                    progress: None,
+                    app: Some("fixture".into()),
+                    effective_app: None,
+                    msg: Some("The provider route never received admission".into()),
+                    title: Some("Approval needed".into()),
+                }],
+                transitions: vec![Transition {
+                    cursor: TransitionCursor(2),
+                    command_epoch: CommandEpoch(0),
+                    id: "after-reconnect".into(),
+                    before_state: None,
+                    after_record: Some(Record {
+                        id: "after-reconnect".into(),
+                        state: State::Blocked,
+                        kind: None,
+                        progress: None,
+                        app: Some("fixture".into()),
+                        effective_app: None,
+                        msg: Some("The provider route never received admission".into()),
+                        title: Some("Approval needed".into()),
+                    }),
+                    cause: TransitionCause::Report,
+                }],
+            })],
+            Instant::now(),
+        );
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].record_id, "after-reconnect");
+
+        drop(stream);
+        session
+            .shutdown(Duration::from_secs(5))
+            .expect("tear down managed SSH route reconnect session");
+        drop(session);
+        drop(connection);
         drop(fixture);
     }
 

@@ -344,3 +344,25 @@ source-provenance and arena-publication assertions. Prior resource/effect/integr
 controls remain required. Metadata execution is host-only; universal slices still
 cover the original raw fixture/library. Hosted Mac, real PTY delivery, app/native
 integration and measured workload budgets remain separate gates.
+
+## Optional Ghostty Program Status source supplement
+
+The optional `zmux-ghostty-vt` owner uses the same pinned Ghostty source after the
+frozen `resource.patch` and `metadata.patch`, followed by the new
+[`program-status-v0.4.patch`](program-status-v0.4.patch). The supplement SHA-256 is
+`f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925`. Its source
+input is Ghostty commit `22fa134a07f5749edd9e92c6bc17d8aaf61843be`, archive
+SHA-256 `a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f`.
+
+The patch extends the existing parser metadata capture for raw OSC 7501 payloads,
+preserves the real BEL/ST terminator, replies to the feature query through the
+engine's reply path, and forwards prompt-start and RIS lifetime callbacks. Its ESC
+handling waits for the next byte to confirm ST; a bare ESC remains a canceled
+report. DECSTR continues through its separate reset path. The existing metadata
+header remains unchanged at SHA-256
+`127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c`.
+
+The optional build selects the `ghostty-7501-v1` candidate with
+`ZMUX_GHOSTTY_CANDIDATE_SET`; it requires its own accepted source and linkage
+receipts. A library built from the historical candidate does not include these
+hooks. This source supplement does not change the default vt100 engine.

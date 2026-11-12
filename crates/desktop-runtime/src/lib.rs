@@ -18,6 +18,7 @@ pub mod persistence;
 pub mod profile_leases;
 pub mod profile_native;
 pub mod profiles;
+pub mod program_status;
 pub mod remote_agent_lifecycle;
 mod replies;
 pub mod schedule;
@@ -295,8 +296,16 @@ pub enum Command {
     AgentLifecycle {
         request: agent_lifecycle::Request,
     },
+    #[serde(skip)]
+    AgentLifecycleCheckpointed {
+        request: agent_lifecycle::Request,
+        checkpoint: Result<Arc<TerminalSnapshot>, String>,
+    },
     SelectAgentTarget {
         target: agent_lifecycle::SelectionTarget,
+    },
+    SelectProgramTarget {
+        target: program_status::SelectionTarget,
     },
     SurfaceOrder {
         request: surface_order::OrderRequest,
@@ -550,6 +559,11 @@ pub struct Snapshot {
     pub agent_alert_cursor: u64,
     pub agent_alert_dropped_through_cursor: u64,
     pub agent_alert_events: Vec<agent_lifecycle::AlertEvent>,
+    /// Terminal-scoped OSC 7501 state. Nonfocused terminals carry one summary
+    /// record; selecting the exact owner publishes its complete bounded list.
+    pub program_status: Vec<program_status::Terminal>,
+    /// Rust-admitted OSC alert events with a global bounded replay cursor.
+    pub program_status_alerts: program_status::AlertSnapshot,
     /// All live terminal frames for local inspection. Native rendering receives only `frames`.
     #[serde(skip)]
     pub control_frames: Vec<Frame>,
@@ -572,9 +586,27 @@ pub struct Desktop {
 struct Envelope {
     request: Request,
     acknowledgement: Option<SyncSender<Execution>>,
+    cancellation: Option<Arc<AtomicBool>>,
     authorization: Option<control_policy::ControlAdmission>,
     reply_deadline: Option<Instant>,
     shared_terminal: Option<SharedTerminalAuthorization>,
+}
+
+const PROGRAM_STATUS_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(2);
+
+enum PendingProgramStatusWork {
+    LocalCommand(Box<Envelope>),
+    RemoteFrame {
+        binding: remote_agent_lifecycle::Binding,
+        frame: zmux_remote_runtime::agent_lifecycle::Frame,
+    },
+}
+
+struct PendingProgramStatusCheckpoint {
+    target: agent_lifecycle::Target,
+    launch_id: u64,
+    checkpoint: zmux_session_runtime::ProgramStatusCheckpoint,
+    work: PendingProgramStatusWork,
 }
 
 pub(crate) struct Execution {
@@ -721,6 +753,7 @@ impl Desktop {
         let windows = windows::WindowRuntime::default();
         let agent_messages = agent_messages::Runtime::start(profile_directory.clone())?;
         let agent_lifecycle = agent_lifecycle::Runtime::default();
+        let program_status = program_status::Runtime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory, profile_native.clone())?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let local_zellij = zellij_coordinator::Runtime::new(zellij_configuration);
@@ -729,6 +762,7 @@ impl Desktop {
             .as_ref()
             .map(|p| p.snapshot.clone())
             .unwrap_or_default();
+        let initial_program_status = program_status.projection(&model.snapshot(), &[]);
         let shared = Arc::new(Shared {
             files: Arc::clone(&files),
             profile_native,
@@ -776,6 +810,8 @@ impl Desktop {
                 agent_alert_cursor: agent_lifecycle.alert_cursor(),
                 agent_alert_dropped_through_cursor: agent_lifecycle.alert_dropped_through_cursor(),
                 agent_alert_events: Vec::new(),
+                program_status: Vec::new(),
+                program_status_alerts: initial_program_status.alerts,
                 control_frames: Vec::new(),
             })),
         });
@@ -791,6 +827,7 @@ impl Desktop {
                     agent_message_result: None,
                     agent_lifecycle,
                     agent_lifecycle_result: None,
+                    program_status,
                     local_tmux,
                     local_zellij,
                     launch_certificates: HashMap::new(),
@@ -832,6 +869,7 @@ impl Desktop {
                     completion_rx,
                     remote_lifecycle_tx,
                     remote_lifecycle_rx,
+                    pending_program_status_checkpoints: VecDeque::new(),
                     pending_launches: 0,
                     launch_workers: Vec::new(),
                     next_launch_id: 1,
@@ -859,6 +897,7 @@ impl Desktop {
         self.send(Envelope {
             request,
             acknowledgement: None,
+            cancellation: None,
             authorization: None,
             reply_deadline: None,
             shared_terminal: None,
@@ -872,17 +911,33 @@ impl Desktop {
         authorization: control_policy::ControlAdmission,
     ) -> Result<Execution, DesktopError> {
         self.validate(&request)?;
+        let route_start = matches!(
+            &request.payload,
+            Command::AgentLifecycle {
+                request: agent_lifecycle::Request {
+                    action: agent_lifecycle::Action::ProviderRouteStarted { .. },
+                    ..
+                }
+            }
+        );
+        let cancellation = route_start.then(|| Arc::new(AtomicBool::new(false)));
         let (sender, receiver) = mpsc::sync_channel(1);
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
+            cancellation: cancellation.clone(),
             authorization: Some(authorization),
             reply_deadline: None,
             shared_terminal: None,
         })?;
-        receiver.recv_timeout(timeout).map_err(|error| match error {
-            mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
-            mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+        receiver.recv_timeout(timeout).map_err(|error| {
+            if let Some(cancellation) = cancellation {
+                cancellation.store(true, Ordering::Release);
+            }
+            match error {
+                mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+                mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+            }
         })
     }
 
@@ -927,6 +982,7 @@ impl Desktop {
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
+            cancellation: None,
             authorization: None,
             reply_deadline: None,
             shared_terminal: None,
@@ -1016,6 +1072,7 @@ impl Desktop {
                 },
             },
             acknowledgement: None,
+            cancellation: None,
             authorization: None,
             reply_deadline: None,
             shared_terminal: None,
@@ -1098,7 +1155,10 @@ impl Desktop {
         }
         if !matches!(
             &request.payload,
-            Command::Action { .. } | Command::Windows { .. } | Command::SelectAgentTarget { .. }
+            Command::Action { .. }
+                | Command::Windows { .. }
+                | Command::SelectAgentTarget { .. }
+                | Command::SelectProgramTarget { .. }
         ) {
             return Err(refused(DesktopError::Failure(
                 "acknowledged dispatch accepts only action and windows commands".into(),
@@ -1109,6 +1169,7 @@ impl Desktop {
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
+            cancellation: None,
             authorization: None,
             reply_deadline: None,
             shared_terminal: None,
@@ -1515,6 +1576,7 @@ impl Desktop {
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
+            cancellation: None,
             authorization: None,
             reply_deadline,
             shared_terminal: None,
@@ -1760,6 +1822,7 @@ struct Worker {
     agent_message_result: Option<agent_messages::OperationReceipt>,
     agent_lifecycle: agent_lifecycle::Runtime,
     agent_lifecycle_result: Option<agent_lifecycle::Receipt>,
+    program_status: program_status::Runtime,
     local_zellij: zellij_coordinator::Runtime,
     launch_certificates: HashMap<(SessionId, u64), zellij_coordinator::LaunchCertificate>,
     local_tmux: local_tmux::Runtime,
@@ -1801,6 +1864,7 @@ struct Worker {
     completion_rx: Receiver<Completion>,
     remote_lifecycle_tx: SyncSender<remote_agent_lifecycle::Message>,
     remote_lifecycle_rx: Receiver<remote_agent_lifecycle::Message>,
+    pending_program_status_checkpoints: VecDeque<PendingProgramStatusCheckpoint>,
     pending_launches: usize,
     launch_workers: Vec<JoinHandle<()>>,
     next_launch_id: u64,
@@ -1938,6 +2002,7 @@ impl Worker {
                 dirty = true;
             }
             dirty |= self.poll_remote_agent_lifecycle();
+            dirty |= self.poll_program_status_checkpoints();
             let mut notices = Vec::new();
             let mut open_requests = Vec::new();
             for (id, slot) in &mut self.slots {
@@ -2067,12 +2132,11 @@ impl Worker {
                 self.publish(false);
             }
         }
+        self.cancel_pending_program_status_checkpoints();
         self.run_shutdown(receiver);
     }
 
     fn poll_remote_agent_lifecycle(&mut self) -> bool {
-        use zmux_remote_runtime::agent_lifecycle::Frame;
-
         let mut dirty = false;
         while let Ok(message) = self.remote_lifecycle_rx.try_recv() {
             match message {
@@ -2087,6 +2151,13 @@ impl Worker {
                         continue;
                     }
                     if let Some(previous_generation) = previous_generation {
+                        dirty |= self.program_status.retire_transport_routes(
+                            binding.target,
+                            program_status::TransportOwner {
+                                runtime_id: binding.runtime_id,
+                                generation: previous_generation,
+                            },
+                        );
                         dirty |= self.agent_lifecycle.remote_transport_reconnected(
                             binding.target,
                             binding.runtime_id,
@@ -2100,108 +2171,27 @@ impl Worker {
                     if !self.remote_stream_current(binding) {
                         continue;
                     }
-                    match frame {
-                        Frame::Heartbeat { .. } => {
-                            dirty |= self.agent_lifecycle.remote_transport_heartbeat(
-                                binding.target,
-                                binding.runtime_id,
-                                binding.generation,
-                                Instant::now(),
-                            );
-                        }
-                        Frame::Hook {
-                            sequence,
-                            event_id,
-                            receipt_requested,
-                            event,
-                            ..
-                        } => {
-                            let previous_cursor = self.agent_lifecycle.alert_cursor();
-                            match self.agent_lifecycle.apply_remote_hook(
-                                binding.target,
-                                binding.runtime_id,
-                                binding.generation,
-                                agent_lifecycle::RemoteHookInvocation {
-                                    sequence,
-                                    hook_id: event_id,
-                                },
-                                *event,
-                                Instant::now(),
-                            ) {
-                                Ok(disposition) => {
-                                    dirty = true;
-                                    let admitted =
-                                        match self.admit_agent_alerts_since(previous_cursor) {
-                                            Ok(()) => true,
-                                            Err(error) => {
-                                                self.last_error = Some(error.to_string());
-                                                false
-                                            }
-                                        };
-                                    if receipt_requested && admitted {
-                                        self.send_remote_hook_receipt(
-                                            binding,
-                                            event_id,
-                                            disposition,
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!("zmux remote agent lifecycle event ignored: {error}");
-                                }
-                            }
-                        }
-                        Frame::ProviderState {
-                            sequence,
-                            observation,
-                            ..
-                        } => {
-                            let previous_cursor = self.agent_lifecycle.alert_cursor();
-                            let model = self.model.snapshot();
-                            match self.agent_lifecycle.apply_remote_provider_observation(
-                                &model,
-                                agent_lifecycle::ProviderObservationInput {
-                                    target: binding.target,
-                                    runtime_id: binding.runtime_id,
-                                    generation: binding.generation,
-                                    sequence,
-                                    observation: *observation,
-                                },
-                                Instant::now(),
-                            ) {
-                                Ok(()) => {
-                                    dirty = true;
-                                    if let Err(error) =
-                                        self.admit_agent_alerts_since(previous_cursor)
-                                    {
-                                        self.last_error = Some(error.to_string());
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "zmux remote provider lifecycle observation ignored: {error}"
-                                    );
-                                }
-                            }
-                        }
-                        Frame::Hello { .. } | Frame::Active { .. } => {
-                            // The reader consumes the handshake before it admits
-                            // any frame to the desktop event queue.
-                        }
-                        Frame::Gap { .. } => {
-                            // The supervisor consumes this frame as a reconnect
-                            // trigger. If it reaches the owner queue, fence the
-                            // current evidence rather than admitting later hooks.
-                            dirty |= self.agent_lifecycle.remote_transport_lost(
-                                binding.target,
-                                binding.runtime_id,
-                                binding.generation,
+                    if remote_frame_needs_status_checkpoint(&frame) {
+                        if self.queue_remote_status_checkpoint(binding, frame.clone()) {
+                            dirty = true;
+                            continue;
+                        } else {
+                            self.last_error = Some(
+                                "remote provider status checkpoint unavailable; route starts fail closed and provider alerts remain deliverable".into(),
                             );
                         }
                     }
+                    dirty |= self.process_remote_lifecycle_frame(binding, frame, None);
                 }
                 remote_agent_lifecycle::Message::Lost { binding } => {
                     if self.remote_stream_owner_current(binding) {
+                        dirty |= self.program_status.retire_transport_routes(
+                            binding.target,
+                            program_status::TransportOwner {
+                                runtime_id: binding.runtime_id,
+                                generation: binding.generation,
+                            },
+                        );
                         dirty |= self.agent_lifecycle.remote_transport_lost(
                             binding.target,
                             binding.runtime_id,
@@ -2212,6 +2202,516 @@ impl Worker {
             }
         }
         dirty
+    }
+
+    fn queue_remote_status_checkpoint(
+        &mut self,
+        binding: remote_agent_lifecycle::Binding,
+        frame: zmux_remote_runtime::agent_lifecycle::Frame,
+    ) -> bool {
+        if self.pending_program_status_checkpoints.len()
+            >= program_status::MAX_PENDING_PROVIDER_CHECKPOINTS
+        {
+            return false;
+        }
+        let Some(slot) = self.slots.get(&binding.target.session_id) else {
+            return false;
+        };
+        if slot.launch_id != binding.launch_id {
+            return false;
+        }
+        let Some(session) = slot.session.as_ref() else {
+            return false;
+        };
+        let checkpoint = match session
+            .request_program_status_checkpoint(Instant::now() + PROGRAM_STATUS_CHECKPOINT_TIMEOUT)
+        {
+            Ok(checkpoint) => checkpoint,
+            Err(_) => return false,
+        };
+        if !self
+            .program_status
+            .begin_provider_checkpoint(binding.target)
+        {
+            checkpoint.cancel();
+            return false;
+        }
+        self.pending_program_status_checkpoints
+            .push_back(PendingProgramStatusCheckpoint {
+                target: binding.target,
+                launch_id: binding.launch_id,
+                checkpoint,
+                work: PendingProgramStatusWork::RemoteFrame { binding, frame },
+            });
+        true
+    }
+
+    fn process_remote_lifecycle_frame(
+        &mut self,
+        binding: remote_agent_lifecycle::Binding,
+        frame: zmux_remote_runtime::agent_lifecycle::Frame,
+        checkpoint: Option<Arc<TerminalSnapshot>>,
+    ) -> bool {
+        use zmux_remote_runtime::agent_lifecycle::Frame;
+
+        if !self.remote_stream_current(binding) {
+            return false;
+        }
+        match frame {
+            Frame::Heartbeat { .. } => self.agent_lifecycle.remote_transport_heartbeat(
+                binding.target,
+                binding.runtime_id,
+                binding.generation,
+                Instant::now(),
+            ),
+            Frame::Hook {
+                sequence,
+                event_id,
+                receipt_requested,
+                event,
+                ..
+            } => {
+                let previous_cursor = self.agent_lifecycle.alert_cursor();
+                match self.agent_lifecycle.apply_remote_hook(
+                    binding.target,
+                    binding.runtime_id,
+                    binding.generation,
+                    agent_lifecycle::RemoteHookInvocation {
+                        sequence,
+                        hook_id: event_id,
+                    },
+                    *event,
+                    Instant::now(),
+                ) {
+                    Ok(disposition) => {
+                        if let Some(snapshot) = checkpoint.as_ref() {
+                            let model = self.model.snapshot();
+                            if let Err(error) = self.program_status.add_confirmed_provider_route(
+                                &model,
+                                program_status::ProviderRouteStart {
+                                    target: binding.target,
+                                    provider: agent_lifecycle::Provider::ClaudeRemote,
+                                    route_id: binding.generation,
+                                    runtime_id: binding.runtime_id,
+                                    generation: binding.generation,
+                                    session_epoch: snapshot.viewport.program_status.session_epoch,
+                                    command_epoch: snapshot.viewport.program_status.command_epoch,
+                                    cursor: snapshot.viewport.program_status.cursor,
+                                    transport: Some(program_status::TransportOwner {
+                                        runtime_id: binding.runtime_id,
+                                        generation: binding.generation,
+                                    }),
+                                },
+                            ) {
+                                eprintln!("remote provider route registration ignored: {error}");
+                            }
+                        }
+                        let status = checkpoint
+                            .as_ref()
+                            .map(|snapshot| &snapshot.viewport.program_status);
+                        let admitted = match self.admit_agent_alerts_since(previous_cursor, status)
+                        {
+                            Ok(()) => true,
+                            Err(error) => {
+                                self.last_error = Some(error.to_string());
+                                false
+                            }
+                        };
+                        if receipt_requested && admitted {
+                            self.send_remote_hook_receipt(binding, event_id, disposition);
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        eprintln!("zmux remote agent lifecycle event ignored: {error}");
+                        false
+                    }
+                }
+            }
+            Frame::ProviderState {
+                sequence,
+                observation,
+                ..
+            } => {
+                let previous_cursor = self.agent_lifecycle.alert_cursor();
+                let model = self.model.snapshot();
+                let provider_kind = observation.provider;
+                match self.agent_lifecycle.apply_remote_provider_observation(
+                    &model,
+                    agent_lifecycle::ProviderObservationInput {
+                        target: binding.target,
+                        runtime_id: binding.runtime_id,
+                        generation: binding.generation,
+                        sequence,
+                        observation: *observation,
+                    },
+                    Instant::now(),
+                ) {
+                    Ok(()) => {
+                        if let Some(snapshot) = checkpoint.as_ref()
+                            && let Err(error) = self.program_status.add_confirmed_provider_route(
+                                &model,
+                                program_status::ProviderRouteStart {
+                                    target: binding.target,
+                                    provider: agent_lifecycle::Provider::for_transport(
+                                        provider_kind,
+                                        true,
+                                    ),
+                                    route_id: binding.generation,
+                                    runtime_id: binding.runtime_id,
+                                    generation: binding.generation,
+                                    session_epoch: snapshot.viewport.program_status.session_epoch,
+                                    command_epoch: snapshot.viewport.program_status.command_epoch,
+                                    cursor: snapshot.viewport.program_status.cursor,
+                                    transport: Some(program_status::TransportOwner {
+                                        runtime_id: binding.runtime_id,
+                                        generation: binding.generation,
+                                    }),
+                                },
+                            )
+                        {
+                            eprintln!("remote provider route registration ignored: {error}");
+                        }
+                        let status = checkpoint
+                            .as_ref()
+                            .map(|snapshot| &snapshot.viewport.program_status);
+                        if let Err(error) = self.admit_agent_alerts_since(previous_cursor, status) {
+                            self.last_error = Some(error.to_string());
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        eprintln!("zmux remote provider lifecycle observation ignored: {error}");
+                        false
+                    }
+                }
+            }
+            Frame::ProviderRoute {
+                provider,
+                route_id,
+                provider_generation,
+                phase,
+                ..
+            } => {
+                let model = self.model.snapshot();
+                let transport = program_status::TransportOwner {
+                    runtime_id: binding.runtime_id,
+                    generation: binding.generation,
+                };
+                match phase {
+                    zmux_remote_runtime::agent_lifecycle::ProviderRoutePhase::Starting => {
+                        let accepted = checkpoint.as_ref().is_some_and(|snapshot| {
+                            self.program_status
+                                .add_provider_route(
+                                    &model,
+                                    program_status::ProviderRouteStart {
+                                        target: binding.target,
+                                        provider: agent_lifecycle::Provider::for_transport(
+                                            provider, true,
+                                        ),
+                                        route_id,
+                                        runtime_id: binding.runtime_id,
+                                        generation: provider_generation,
+                                        session_epoch: snapshot
+                                            .viewport
+                                            .program_status
+                                            .session_epoch,
+                                        command_epoch: snapshot
+                                            .viewport
+                                            .program_status
+                                            .command_epoch,
+                                        cursor: snapshot.viewport.program_status.cursor,
+                                        transport: Some(transport),
+                                    },
+                                )
+                                .is_ok()
+                        });
+                        let receipt_queued = self
+                            .slots
+                            .get(&binding.target.session_id)
+                            .and_then(|slot| slot.remote_lifecycle.as_ref())
+                            .is_some_and(|stream| {
+                                stream.send_provider_route_receipt(binding, route_id, accepted)
+                            });
+                        if !receipt_queued && accepted {
+                            let _ = self.program_status.cancel_provider_route(
+                                binding.target,
+                                route_id,
+                                binding.runtime_id,
+                                provider_generation,
+                                Some(transport),
+                            );
+                        }
+                    }
+                    zmux_remote_runtime::agent_lifecycle::ProviderRoutePhase::Ended => {
+                        let _ = self.cancel_pending_remote_route(binding, route_id);
+                        let _ = self.program_status.end_provider_route(
+                            binding.target,
+                            route_id,
+                            binding.runtime_id,
+                            provider_generation,
+                            Some(transport),
+                        );
+                    }
+                    zmux_remote_runtime::agent_lifecycle::ProviderRoutePhase::Cancelled => {
+                        let _ = self.cancel_pending_remote_route(binding, route_id);
+                        let _ = self.program_status.cancel_provider_route(
+                            binding.target,
+                            route_id,
+                            binding.runtime_id,
+                            provider_generation,
+                            Some(transport),
+                        );
+                    }
+                }
+                true
+            }
+            Frame::Hello { .. } | Frame::Active { .. } => false,
+            Frame::Gap { .. } => self.agent_lifecycle.remote_transport_lost(
+                binding.target,
+                binding.runtime_id,
+                binding.generation,
+            ),
+        }
+    }
+
+    fn cancel_pending_remote_route(
+        &mut self,
+        binding: remote_agent_lifecycle::Binding,
+        route_id: uuid::Uuid,
+    ) -> bool {
+        let position = self.pending_program_status_checkpoints.iter().position(|pending| {
+            pending.target == binding.target
+                && matches!(
+                    &pending.work,
+                    PendingProgramStatusWork::RemoteFrame {
+                        binding: pending_binding,
+                        frame: zmux_remote_runtime::agent_lifecycle::Frame::ProviderRoute {
+                            route_id: pending_route_id,
+                            phase: zmux_remote_runtime::agent_lifecycle::ProviderRoutePhase::Starting,
+                            ..
+                        },
+                    } if pending_binding.same_owner(binding) && *pending_route_id == route_id
+                )
+        });
+        let Some(position) = position else {
+            return false;
+        };
+        let pending = self
+            .pending_program_status_checkpoints
+            .remove(position)
+            .expect("pending remote route position remains valid");
+        pending.checkpoint.cancel();
+        self.program_status.end_provider_checkpoint(pending.target);
+        if let Some(stream) = self
+            .slots
+            .get(&binding.target.session_id)
+            .and_then(|slot| slot.remote_lifecycle.as_ref())
+        {
+            let _ = stream.send_provider_route_receipt(binding, route_id, false);
+        }
+        true
+    }
+
+    fn cancel_pending_local_route(
+        &mut self,
+        target: agent_lifecycle::Target,
+        route_id: uuid::Uuid,
+        runtime_id: uuid::Uuid,
+        generation: uuid::Uuid,
+    ) -> bool {
+        let position = self
+            .pending_program_status_checkpoints
+            .iter()
+            .position(|pending| {
+                pending.target == target
+                    && matches!(
+                        &pending.work,
+                        PendingProgramStatusWork::LocalCommand(envelope)
+                            if matches!(
+                                &envelope.request.payload,
+                                Command::AgentLifecycle {
+                                    request: agent_lifecycle::Request {
+                                        action: agent_lifecycle::Action::ProviderRouteStarted {
+                                            target: pending_target,
+                                            route_id: pending_route_id,
+                                            runtime_id: pending_runtime_id,
+                                            generation: pending_generation,
+                                            ..
+                                        },
+                                        ..
+                                    }
+                                } if *pending_target == target
+                                    && *pending_route_id == route_id
+                                    && *pending_runtime_id == runtime_id
+                                    && *pending_generation == generation
+                            )
+                    )
+            });
+        let Some(position) = position else {
+            return false;
+        };
+        let pending = self
+            .pending_program_status_checkpoints
+            .remove(position)
+            .expect("pending local route position remains valid");
+        pending.checkpoint.cancel();
+        self.program_status.end_provider_checkpoint(pending.target);
+        true
+    }
+
+    fn poll_program_status_checkpoints(&mut self) -> bool {
+        let mut dirty = false;
+        let mut index = 0;
+        while index < self.pending_program_status_checkpoints.len() {
+            let target = self.pending_program_status_checkpoints[index].target;
+            let blocked_by_earlier = self
+                .pending_program_status_checkpoints
+                .iter()
+                .take(index)
+                .any(|pending| pending.target == target);
+            if blocked_by_earlier {
+                index += 1;
+                continue;
+            }
+            let caller_cancelled = matches!(
+                &self.pending_program_status_checkpoints[index].work,
+                PendingProgramStatusWork::LocalCommand(envelope)
+                    if envelope.cancellation.as_ref().is_some_and(|cancelled| {
+                        cancelled.load(Ordering::Acquire)
+                    })
+            );
+            if caller_cancelled {
+                let pending = self
+                    .pending_program_status_checkpoints
+                    .remove(index)
+                    .expect("cancelled checkpoint index remains valid");
+                pending.checkpoint.cancel();
+                self.program_status.end_provider_checkpoint(target);
+                dirty = true;
+                continue;
+            }
+            let result = self.pending_program_status_checkpoints[index]
+                .checkpoint
+                .try_recv();
+            let Some(result) = result else {
+                index += 1;
+                continue;
+            };
+            let pending = self
+                .pending_program_status_checkpoints
+                .remove(index)
+                .expect("pending checkpoint index remains valid");
+            let slot_current = self
+                .slots
+                .get(&target.session_id)
+                .is_some_and(|slot| slot.launch_id == pending.launch_id && slot.session.is_some());
+            let target_current =
+                slot_current && current_target_exists(&self.model.snapshot(), target);
+            let checkpoint = if target_current {
+                result.map_err(|error| error.to_string())
+            } else {
+                Err("provider checkpoint owner or session changed before admission".into())
+            };
+            let checkpoint = match checkpoint {
+                Ok(snapshot) => {
+                    self.advance_checkpoint_snapshot(
+                        target.session_id,
+                        pending.launch_id,
+                        &snapshot,
+                    );
+                    let model = self.model.snapshot();
+                    let mut frames = self.control_frames(&model);
+                    let Some(frame) = frames
+                        .iter_mut()
+                        .find(|frame| frame.session_id == target.session_id)
+                    else {
+                        self.program_status.end_provider_checkpoint(target);
+                        self.resume_checkpoint_work(
+                            pending.work,
+                            Err("provider checkpoint terminal frame is unavailable".into()),
+                        );
+                        dirty = true;
+                        continue;
+                    };
+                    frame.snapshot = Some(Arc::clone(&snapshot));
+                    let alerts = self.program_status.observe_checkpoint(
+                        &model,
+                        &frames,
+                        target,
+                        Instant::now(),
+                    );
+                    self.notify_program_status_alerts(&model, alerts);
+                    Ok(snapshot)
+                }
+                Err(error) => Err(error),
+            };
+            self.program_status.end_provider_checkpoint(target);
+            self.resume_checkpoint_work(pending.work, checkpoint);
+            dirty = true;
+        }
+        dirty
+    }
+
+    fn advance_checkpoint_snapshot(
+        &mut self,
+        session_id: SessionId,
+        launch_id: u64,
+        checkpoint: &Arc<TerminalSnapshot>,
+    ) {
+        let Some(slot) = self.slots.get_mut(&session_id) else {
+            return;
+        };
+        if slot.launch_id != launch_id {
+            return;
+        }
+        let replace = slot.cached.as_ref().is_none_or(|cached| {
+            cached.bytes_read <= checkpoint.bytes_read
+                && (cached.viewport.program_status.session_epoch
+                    != checkpoint.viewport.program_status.session_epoch
+                    || cached.viewport.program_status.cursor
+                        <= checkpoint.viewport.program_status.cursor)
+        });
+        if replace {
+            slot.cached = Some(Arc::clone(checkpoint));
+        }
+    }
+
+    fn resume_checkpoint_work(
+        &mut self,
+        work: PendingProgramStatusWork,
+        checkpoint: Result<Arc<TerminalSnapshot>, String>,
+    ) {
+        match work {
+            PendingProgramStatusWork::LocalCommand(mut envelope) => {
+                if let Err(error) = &checkpoint {
+                    self.last_error =
+                        Some(format!("provider status checkpoint unavailable: {error}"));
+                }
+                if let Command::AgentLifecycle { request } = &envelope.request.payload {
+                    envelope.request.payload = Command::AgentLifecycleCheckpointed {
+                        request: request.clone(),
+                        checkpoint,
+                    };
+                    self.command(*envelope);
+                }
+            }
+            PendingProgramStatusWork::RemoteFrame { binding, frame } => {
+                if let Err(error) = &checkpoint {
+                    self.last_error = Some(format!(
+                        "remote provider status checkpoint unavailable: {error}"
+                    ));
+                }
+                self.process_remote_lifecycle_frame(binding, frame, checkpoint.ok());
+            }
+        }
+    }
+
+    fn cancel_pending_program_status_checkpoints(&mut self) {
+        for pending in self.pending_program_status_checkpoints.drain(..) {
+            pending.checkpoint.cancel();
+            self.program_status.end_provider_checkpoint(pending.target);
+        }
     }
 
     /// Recheck the exact remote terminal, launch, adapter token and live SSH
@@ -2429,7 +2929,82 @@ impl Worker {
         }
         dirty | self.poll_zellij_observations()
     }
-    fn command(&mut self, envelope: Envelope) {
+    fn command(&mut self, mut envelope: Envelope) {
+        let checkpoint_request = match &envelope.request.payload {
+            Command::AgentLifecycle { request }
+                if matches!(
+                    request.action,
+                    agent_lifecycle::Action::Register { .. }
+                        | agent_lifecycle::Action::Event { .. }
+                        | agent_lifecycle::Action::ProviderObservation { .. }
+                        | agent_lifecycle::Action::ProviderRouteStarted { .. }
+                ) =>
+            {
+                Some(request.clone())
+            }
+            _ => None,
+        };
+        if let Some(request) = checkpoint_request {
+            let target = match &request.action {
+                agent_lifecycle::Action::Register { target, .. }
+                | agent_lifecycle::Action::ProviderObservation { target, .. }
+                | agent_lifecycle::Action::ProviderRouteStarted { target, .. } => Some(*target),
+                agent_lifecycle::Action::Event { capability, .. } => {
+                    self.agent_lifecycle.target_for_capability(*capability)
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                let pending_capacity = self.pending_program_status_checkpoints.len()
+                    < program_status::MAX_PENDING_PROVIDER_CHECKPOINTS;
+                let result = if !pending_capacity {
+                    Err(SessionError::QueueFull)
+                } else if let Some(slot) = self.slots.get(&target.session_id) {
+                    match slot.session.as_ref() {
+                        Some(session) => session.request_program_status_checkpoint(
+                            Instant::now() + PROGRAM_STATUS_CHECKPOINT_TIMEOUT,
+                        ),
+                        None => Err(SessionError::Closed),
+                    }
+                } else {
+                    Err(SessionError::Closed)
+                };
+                match result {
+                    Ok(checkpoint) => {
+                        let launch_id = self
+                            .slots
+                            .get(&target.session_id)
+                            .map_or(0, |slot| slot.launch_id);
+                        if self.program_status.begin_provider_checkpoint(target) {
+                            self.pending_program_status_checkpoints.push_back(
+                                PendingProgramStatusCheckpoint {
+                                    target,
+                                    launch_id,
+                                    checkpoint,
+                                    work: PendingProgramStatusWork::LocalCommand(Box::new(
+                                        envelope,
+                                    )),
+                                },
+                            );
+                            return;
+                        }
+                        checkpoint.cancel();
+                        envelope.request.payload = Command::AgentLifecycleCheckpointed {
+                            request,
+                            checkpoint: Err(
+                                "too many provider status checkpoints are pending".into()
+                            ),
+                        };
+                    }
+                    Err(error) => {
+                        envelope.request.payload = Command::AgentLifecycleCheckpointed {
+                            request,
+                            checkpoint: Err(error.to_string()),
+                        };
+                    }
+                }
+            }
+        }
         let request = envelope.request;
         let shared_terminal = envelope.shared_terminal;
         self.agent_message_result = None;
@@ -2672,7 +3247,12 @@ impl Worker {
         }
         match command {
             Command::AgentLifecycle { request } => self.agent_lifecycle_request(request),
+            Command::AgentLifecycleCheckpointed {
+                request,
+                checkpoint,
+            } => self.agent_lifecycle_request_with_checkpoint(request, Some(checkpoint)),
             Command::SelectAgentTarget { target } => self.select_agent_target(target),
+            Command::SelectProgramTarget { target } => self.select_program_target(target),
             Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
                 DesktopError::Failure("message commands require their admission envelope".into()),
             ),
@@ -2910,6 +3490,14 @@ impl Worker {
         &mut self,
         request: agent_lifecycle::Request,
     ) -> Result<(), DesktopError> {
+        self.agent_lifecycle_request_with_checkpoint(request, None)
+    }
+
+    fn agent_lifecycle_request_with_checkpoint(
+        &mut self,
+        request: agent_lifecycle::Request,
+        checkpoint: Option<Result<Arc<TerminalSnapshot>, String>>,
+    ) -> Result<(), DesktopError> {
         let target = match &request.action {
             agent_lifecycle::Action::Register { target, .. } => Some(*target),
             agent_lifecycle::Action::Event { capability, .. } => {
@@ -2917,7 +3505,10 @@ impl Worker {
             }
             agent_lifecycle::Action::ProviderObservation { target, .. }
             | agent_lifecycle::Action::ProviderEvidenceLost { target, .. }
-            | agent_lifecycle::Action::ProviderSessionEnded { target, .. } => Some(*target),
+            | agent_lifecycle::Action::ProviderSessionEnded { target, .. }
+            | agent_lifecycle::Action::ProviderRouteStarted { target, .. }
+            | agent_lifecycle::Action::ProviderRouteEnded { target, .. }
+            | agent_lifecycle::Action::ProviderRouteCancelled { target, .. } => Some(*target),
         }
         .ok_or_else(|| DesktopError::Failure("lifecycle capability is stale or unknown".into()))?;
         let provider = match &request.action {
@@ -2935,12 +3526,24 @@ impl Worker {
             | agent_lifecycle::Action::ProviderSessionEnded { provider, .. } => {
                 agent_lifecycle::Provider::for_transport(*provider, false)
             }
+            agent_lifecycle::Action::ProviderRouteStarted { provider, .. }
+            | agent_lifecycle::Action::ProviderRouteEnded { provider, .. }
+            | agent_lifecycle::Action::ProviderRouteCancelled { provider, .. } => *provider,
         };
+        let route_action = matches!(
+            &request.action,
+            agent_lifecycle::Action::ProviderRouteStarted { .. }
+                | agent_lifecycle::Action::ProviderRouteEnded { .. }
+                | agent_lifecycle::Action::ProviderRouteCancelled { .. }
+        );
         let normalized_action = matches!(
             &request.action,
             agent_lifecycle::Action::ProviderObservation { .. }
                 | agent_lifecycle::Action::ProviderEvidenceLost { .. }
                 | agent_lifecycle::Action::ProviderSessionEnded { .. }
+                | agent_lifecycle::Action::ProviderRouteStarted { .. }
+                | agent_lifecycle::Action::ProviderRouteEnded { .. }
+                | agent_lifecycle::Action::ProviderRouteCancelled { .. }
         );
         if normalized_action
             && !matches!(
@@ -2949,7 +3552,7 @@ impl Worker {
             )
         {
             return Err(DesktopError::Failure(
-                "provider observation must identify a supported local provider".into(),
+                "provider lifecycle action must identify a supported local provider".into(),
             ));
         }
         if !normalized_action && provider != agent_lifecycle::Provider::ClaudeLocal {
@@ -2958,6 +3561,16 @@ impl Worker {
             ));
         }
         let model = self.model.snapshot();
+        if route_action
+            && !matches!(
+                provider,
+                agent_lifecycle::Provider::CodexLocal | agent_lifecycle::Provider::OpenCodeLocal
+            )
+        {
+            return Err(DesktopError::Failure(
+                "pending provider routes support only local Codex or OpenCode".into(),
+            ));
+        }
         let has_owner = if normalized_action {
             agent_lifecycle::has_local_provider_owner(&model, target, provider)
         } else {
@@ -2976,7 +3589,11 @@ impl Worker {
                     .as_ref()
                     .is_some_and(|snapshot| snapshot.state == zmux_session_runtime::State::Running)
         });
-        if !running {
+        let cancelling_unspawned_route = matches!(
+            &request.action,
+            agent_lifecycle::Action::ProviderRouteCancelled { .. }
+        );
+        if !running && !cancelling_unspawned_route {
             return Err(DesktopError::Failure(
                 "lifecycle target session is not currently running".into(),
             ));
@@ -2989,6 +3606,59 @@ impl Worker {
         let previous_alert_cursor = self.agent_lifecycle.alert_cursor();
         let request_id = request.request_id;
         let now = Instant::now();
+        let observe_provider_route = match &request.action {
+            agent_lifecycle::Action::Register {
+                target,
+                provider,
+                runtime_id,
+                generation,
+                ..
+            } => Some((*target, *provider, *runtime_id, *generation)),
+            agent_lifecycle::Action::Event {
+                capability,
+                runtime_id,
+                generation,
+                ..
+            } => self
+                .agent_lifecycle
+                .provider_for_capability(*capability)
+                .map(|provider| (target, provider, *runtime_id, *generation)),
+            agent_lifecycle::Action::ProviderObservation {
+                target,
+                runtime_id,
+                generation,
+                observation,
+                ..
+            } => Some((
+                *target,
+                agent_lifecycle::Provider::for_transport(observation.provider, false),
+                *runtime_id,
+                *generation,
+            )),
+            _ => None,
+        };
+        let ended_provider_route = match &request.action {
+            agent_lifecycle::Action::ProviderEvidenceLost {
+                target,
+                provider,
+                runtime_id,
+                generation,
+                ..
+            }
+            | agent_lifecycle::Action::ProviderSessionEnded {
+                target,
+                provider,
+                runtime_id,
+                generation,
+                ..
+            } => Some((
+                *target,
+                agent_lifecycle::Provider::for_transport(*provider, false),
+                *runtime_id,
+                *generation,
+            )),
+            _ => None,
+        };
         let receipt = match request.action {
             action @ (agent_lifecycle::Action::Register { .. }
             | agent_lifecycle::Action::Event { .. }) => self
@@ -3080,13 +3750,132 @@ impl Worker {
                     capability: None,
                 }
             }
+            agent_lifecycle::Action::ProviderRouteStarted {
+                target,
+                provider,
+                route_id,
+                runtime_id,
+                generation,
+            } => {
+                let snapshot = match checkpoint.as_ref() {
+                    Some(Ok(snapshot)) => Arc::clone(snapshot),
+                    Some(Err(error)) => {
+                        return Err(DesktopError::Failure(format!(
+                            "provider route status checkpoint unavailable: {error}"
+                        )));
+                    }
+                    None => self.live_terminal_snapshot(target.session_id)?,
+                };
+                let status = &snapshot.viewport.program_status;
+                self.program_status
+                    .add_provider_route(
+                        &model,
+                        program_status::ProviderRouteStart {
+                            target,
+                            provider,
+                            route_id,
+                            runtime_id,
+                            generation,
+                            session_epoch: status.session_epoch,
+                            command_epoch: status.command_epoch,
+                            cursor: status.cursor,
+                            transport: None,
+                        },
+                    )
+                    .map_err(DesktopError::Failure)?;
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
+            agent_lifecycle::Action::ProviderRouteEnded {
+                target,
+                route_id,
+                runtime_id,
+                generation,
+                ..
+            } => {
+                self.cancel_pending_local_route(target, route_id, runtime_id, generation);
+                let _ = self
+                    .program_status
+                    .end_provider_route(target, route_id, runtime_id, generation, None);
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
+            agent_lifecycle::Action::ProviderRouteCancelled {
+                target,
+                route_id,
+                runtime_id,
+                generation,
+                ..
+            } => {
+                self.cancel_pending_local_route(target, route_id, runtime_id, generation);
+                let _ = self
+                    .program_status
+                    .cancel_provider_route(target, route_id, runtime_id, generation, None);
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
         };
+        if let Some((route_target, route_provider, runtime_id, generation)) = observe_provider_route
+        {
+            let snapshot = match checkpoint.as_ref() {
+                Some(Ok(snapshot)) => Some(Arc::clone(snapshot)),
+                Some(Err(_)) => None,
+                None => self.live_terminal_snapshot(route_target.session_id).ok(),
+            };
+            if let Some(snapshot) = snapshot
+                && let Err(error) = self.program_status.add_confirmed_provider_route(
+                    &model,
+                    program_status::ProviderRouteStart {
+                        target: route_target,
+                        provider: route_provider,
+                        route_id: generation,
+                        runtime_id,
+                        generation,
+                        session_epoch: snapshot.viewport.program_status.session_epoch,
+                        command_epoch: snapshot.viewport.program_status.command_epoch,
+                        cursor: snapshot.viewport.program_status.cursor,
+                        transport: None,
+                    },
+                )
+            {
+                eprintln!("provider route registration ignored: {error}");
+            }
+        }
+        if let Some((route_target, _, runtime_id, generation)) = ended_provider_route {
+            let _ = self.program_status.end_provider_route(
+                route_target,
+                generation,
+                runtime_id,
+                generation,
+                None,
+            );
+        }
         self.agent_lifecycle_result = Some(receipt);
-        self.admit_agent_alerts_since(previous_alert_cursor)?;
+        let current_status = checkpoint
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(|snapshot| &snapshot.viewport.program_status);
+        self.admit_agent_alerts_since(previous_alert_cursor, current_status)?;
         Ok(())
     }
 
-    fn admit_agent_alerts_since(&mut self, previous_cursor: u64) -> Result<(), DesktopError> {
+    fn admit_agent_alerts_since(
+        &mut self,
+        previous_cursor: u64,
+        current_status: Option<&zmux_program_status::ProgramStatusSnapshot>,
+    ) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
         let alert_epoch = self.agent_lifecycle.alert_epoch();
         let events: Vec<_> = self
@@ -3096,6 +3885,20 @@ impl Worker {
             .filter(|event| event.cursor > previous_cursor)
             .collect();
         for event in events {
+            let source_target = agent_lifecycle::Target {
+                identity_namespace: event.identity_namespace,
+                surface_id: event.surface_id,
+                surface_uuid: event.surface_uuid,
+                session_id: event.session_id,
+            };
+            if current_status.is_some_and(|status| {
+                !self
+                    .program_status
+                    .provider_alert_allowed(source_target, status)
+            }) {
+                self.agent_lifecycle.suppress_alert_event(event.cursor);
+                continue;
+            }
             let provider_name = event.provider.display_name();
             let (kind, title, body) = match event.kind {
                 agent_lifecycle::AlertKind::NeedsUser => (
@@ -3141,6 +3944,25 @@ impl Worker {
         })
     }
 
+    fn select_program_target(
+        &mut self,
+        target: program_status::SelectionTarget,
+    ) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        let frames = self.control_frames(&model);
+        if !self
+            .program_status
+            .matches_selection(&target, &model, &frames)
+        {
+            return Err(DesktopError::Failure(
+                "stale program target or terminal session is no longer available".into(),
+            ));
+        }
+        self.action(Action::SelectSurface {
+            surface_id: target.surface_id,
+        })
+    }
+
     fn writable_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
         if self.zellij_input_fenced(id) {
             return Err(DesktopError::Failure(
@@ -3154,6 +3976,11 @@ impl Worker {
             .get(&id)
             .and_then(|slot| slot.session.as_ref())
             .ok_or_else(|| DesktopError::Failure("terminal is starting or no longer exists".into()))
+    }
+    fn live_terminal_snapshot(&self, id: SessionId) -> Result<Arc<TerminalSnapshot>, DesktopError> {
+        self.live_session(id)?
+            .snapshot()
+            .map_err(|error| DesktopError::Failure(error.to_string()))
     }
     fn open_terminal_link(&mut self, request: TerminalLinkRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
@@ -4375,6 +5202,28 @@ impl Worker {
         }
         // Results for closed panes are canceled and reaped, never reattached.
     }
+    fn control_frames(&self, model: &Model) -> Vec<Frame> {
+        model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .filter_map(|surface| {
+                surface
+                    .session_id
+                    .and_then(|id| self.slots.get(&id))
+                    .map(|slot| Frame {
+                        session_id: surface.session_id.expect("terminal slot"),
+                        process_id: slot.session.as_ref().map(Session::process_id),
+                        starting: slot.starting,
+                        reconnectable: slot.reconnectable,
+                        snapshot: slot.cached.clone(),
+                        failure: slot.failure.clone(),
+                    })
+            })
+            .collect()
+    }
+
     fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
         self.browser
             .reconcile(&self.model.snapshot(), Instant::now());
@@ -4402,25 +5251,11 @@ impl Worker {
             .reconcile(&model, &session_states, Instant::now());
         self.attention.reconcile(&model);
         self.metadata.reconcile(&model);
-        let control_frames: Vec<_> = model
-            .workspaces
-            .iter()
-            .flat_map(|workspace| workspace.root.panes())
-            .flat_map(|pane| &pane.surfaces)
-            .filter_map(|surface| {
-                surface
-                    .session_id
-                    .and_then(|id| self.slots.get(&id))
-                    .map(|slot| Frame {
-                        session_id: surface.session_id.expect("terminal slot"),
-                        process_id: slot.session.as_ref().map(Session::process_id),
-                        starting: slot.starting,
-                        reconnectable: slot.reconnectable,
-                        snapshot: slot.cached.clone(),
-                        failure: slot.failure.clone(),
-                    })
-            })
-            .collect();
+        let control_frames = self.control_frames(&model);
+        let admitted_program_alerts =
+            self.program_status
+                .observe(&model, &control_frames, Instant::now());
+        self.notify_program_status_alerts(&model, admitted_program_alerts);
         let ssh_routes = model
             .workspaces
             .iter()
@@ -4473,6 +5308,7 @@ impl Worker {
         let workspace_metadata = self.metadata.snapshot(&model);
         let agent_lifecycle = self.agent_lifecycle.snapshot(&model);
         let agent_alert_events = self.agent_lifecycle.alert_events(&model);
+        let program_status_projection = self.program_status.projection(&model, &control_frames);
         let published = Arc::new(Snapshot {
             revision: self.revision,
             workspace_identities,
@@ -4517,16 +5353,98 @@ impl Worker {
             agent_alert_cursor: self.agent_lifecycle.alert_cursor(),
             agent_alert_dropped_through_cursor: self.agent_lifecycle.alert_dropped_through_cursor(),
             agent_alert_events,
+            program_status: program_status_projection.terminals,
+            program_status_alerts: program_status_projection.alerts,
             control_frames,
         });
         match self.shared.snapshot.lock() {
-            Ok(mut snapshot) => {
-                *snapshot = Arc::clone(&published);
-            }
+            Ok(mut snapshot) => *snapshot = Arc::clone(&published),
             Err(error) => eprintln!("zmux desktop publication failed: {error}"),
         }
         published
     }
+
+    fn notify_program_status_alerts(
+        &mut self,
+        model: &Model,
+        events: Vec<program_status::AlertEvent>,
+    ) {
+        for event in events {
+            let app = event.app.as_deref().unwrap_or("Program");
+            let (kind, title, body) = match event.kind {
+                program_status::AlertKind::NeedsUser => (
+                    "needs_user",
+                    event
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| format!("{app} needs you")),
+                    event
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| format!("{app} is waiting for your input.")),
+                ),
+                program_status::AlertKind::Completed => (
+                    "completed",
+                    event
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| format!("{app} finished")),
+                    event
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| format!("{app} finished.")),
+                ),
+            };
+            let event_key = format!("{}:{}", self.program_status.alert_epoch(), event.cursor);
+            if let Err(error) = self.attention.notify_program_status_event(
+                model,
+                event.surface_id,
+                event.session_id,
+                kind,
+                &event_key,
+                &NotificationContent {
+                    title,
+                    subtitle: app.to_owned(),
+                    body,
+                    ..Default::default()
+                },
+            ) {
+                self.last_error = Some(error.to_string());
+            }
+        }
+    }
+}
+
+fn remote_frame_needs_status_checkpoint(
+    frame: &zmux_remote_runtime::agent_lifecycle::Frame,
+) -> bool {
+    use zmux_remote_runtime::agent_lifecycle::{Frame, ProviderRoutePhase};
+    matches!(
+        frame,
+        Frame::Hook { .. }
+            | Frame::ProviderState { .. }
+            | Frame::ProviderRoute {
+                phase: ProviderRoutePhase::Starting,
+                ..
+            }
+    )
+}
+
+fn current_target_exists(model: &Model, target: agent_lifecycle::Target) -> bool {
+    model.identity_namespace == target.identity_namespace
+        && model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .any(|surface| {
+                surface.id == target.surface_id
+                    && surface.session_id == Some(target.session_id)
+                    && model.object_uuid(
+                        zmux_workspace_core::targets::TargetKind::Surface,
+                        surface.id.0,
+                    ) == target.surface_uuid
+            })
 }
 
 #[cfg(test)]

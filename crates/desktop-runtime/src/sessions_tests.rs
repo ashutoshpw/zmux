@@ -84,6 +84,13 @@ fn worker(directory: &Directory) -> Worker {
     let terminal_engine = None;
     let (completion_tx, completion_rx) = mpsc::sync_channel(MAX_TERMINALS);
     let (remote_lifecycle_tx, remote_lifecycle_rx) = mpsc::sync_channel(16);
+    let program_status = program_status::Runtime::default();
+    let program_status_alerts = program_status::AlertSnapshot {
+        epoch: program_status.alert_epoch(),
+        cursor: 0,
+        dropped_through_cursor: 0,
+        events: Vec::new(),
+    };
     let files = Arc::new(crate::files::FileService::start(Default::default()).unwrap());
     let worker_shared = Arc::new(Shared {
         files: Arc::clone(&files),
@@ -132,6 +139,8 @@ fn worker(directory: &Directory) -> Worker {
             agent_alert_cursor: 0,
             agent_alert_dropped_through_cursor: 0,
             agent_alert_events: Vec::new(),
+            program_status: Vec::new(),
+            program_status_alerts,
             control_frames: Vec::new(),
         })),
     });
@@ -140,6 +149,7 @@ fn worker(directory: &Directory) -> Worker {
         agent_message_result: None,
         agent_lifecycle: agent_lifecycle::Runtime::default(),
         agent_lifecycle_result: None,
+        program_status,
         local_tmux,
         local_zellij,
         launch_certificates: HashMap::new(),
@@ -181,6 +191,7 @@ fn worker(directory: &Directory) -> Worker {
         completion_rx,
         remote_lifecycle_tx,
         remote_lifecycle_rx,
+        pending_program_status_checkpoints: VecDeque::new(),
         pending_launches: 0,
         launch_workers: Vec::new(),
         next_launch_id: 1,
@@ -293,6 +304,198 @@ fn close_writer(worker: &mut Worker) {
         .join_until(Instant::now() + Duration::from_secs(5))
         .unwrap();
 }
+
+fn execute_lifecycle_on_worker(worker: &mut Worker, request: agent_lifecycle::Request) {
+    let checkpoint_expected = matches!(
+        &request.action,
+        agent_lifecycle::Action::ProviderRouteStarted { .. }
+    );
+    let (sender, receiver) = mpsc::sync_channel(1);
+    worker.command(Envelope {
+        request: Request {
+            version: 1,
+            request_id: 91,
+            payload: Command::AgentLifecycle { request },
+        },
+        acknowledgement: Some(sender),
+        cancellation: None,
+        authorization: None,
+        reply_deadline: None,
+        shared_terminal: None,
+    });
+    if checkpoint_expected {
+        assert!(
+            receiver.try_recv().is_err(),
+            "route start waits for worker checkpoint"
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        worker.poll_program_status_checkpoints();
+        match receiver.try_recv() {
+            Ok(execution) => {
+                execution.result.unwrap();
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => panic!("lifecycle acknowledgement closed"),
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        assert!(
+            Instant::now() < deadline,
+            "status checkpoint did not complete"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before_journal_read() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let model = worker.model.snapshot();
+    let surface = model.workspaces[0].root.panes()[0].selected().clone();
+    let session_id = surface.session_id.unwrap();
+    let session = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"stty -echo; printf '\033]133;A\007'; printf 'ROUTE_READY\n'; IFS= read -r line; printf '\033]7501;id=permission:state=blocked:kind=permission\007'; printf 'ROUTE_REPORT_SENT\n'; IFS= read -r line"#.into(),
+        ],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let initial = session.snapshot().unwrap();
+    worker.slots.insert(
+        session_id,
+        Slot {
+            cancellation: Arc::new(AtomicBool::new(false)),
+            launch_id: 1,
+            session: Some(session),
+            connection: None,
+            remote_lifecycle: None,
+            cached: Some(initial),
+            starting: false,
+            reconnectable: false,
+            failure: None,
+            resize: None,
+            last_notice: 0,
+        },
+    );
+    let wait_for_live_snapshot =
+        |worker: &Worker, predicate: &dyn Fn(&TerminalSnapshot) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut last = None;
+            loop {
+                if let Ok(snapshot) = worker.live_terminal_snapshot(session_id) {
+                    if predicate(&snapshot) {
+                        return snapshot;
+                    }
+                    last = Some((
+                        snapshot.state,
+                        snapshot.viewport.contents.clone(),
+                        snapshot.viewport.program_status.command_epoch,
+                        snapshot.viewport.program_status.cursor,
+                    ));
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "PTY did not reach expected state; last={last:?}"
+                );
+                thread::sleep(Duration::from_millis(2));
+            }
+        };
+    let current = wait_for_live_snapshot(&worker, &|snapshot| {
+        snapshot.viewport.contents.contains("ROUTE_READY")
+            && snapshot.viewport.program_status.command_epoch.0 == 1
+    });
+    assert_eq!(current.state, zmux_session_runtime::State::Running);
+    let mut stale_cached = current.as_ref().clone();
+    stale_cached.viewport.program_status.command_epoch = zmux_program_status::CommandEpoch(0);
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(Arc::new(stale_cached));
+
+    let target = agent_lifecycle::Target {
+        identity_namespace: model.identity_namespace,
+        surface_id: surface.id,
+        surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+        session_id,
+    };
+    let route_id = Uuid::new_v4();
+    let runtime_id = Uuid::new_v4();
+    let generation = Uuid::new_v4();
+    for action in [
+        agent_lifecycle::Action::ProviderRouteStarted {
+            target,
+            provider: agent_lifecycle::Provider::CodexLocal,
+            route_id,
+            runtime_id,
+            generation,
+        },
+        agent_lifecycle::Action::ProviderRouteEnded {
+            target,
+            provider: agent_lifecycle::Provider::CodexLocal,
+            route_id,
+            runtime_id,
+            generation,
+        },
+    ] {
+        execute_lifecycle_on_worker(
+            &mut worker,
+            agent_lifecycle::Request {
+                request_id: Uuid::new_v4(),
+                action,
+            },
+        );
+    }
+
+    worker
+        .live_session(session_id)
+        .unwrap()
+        .send_input(b"run-provider\n")
+        .unwrap();
+    let report = wait_for_live_snapshot(&worker, &|snapshot| {
+        snapshot.viewport.contents.contains("ROUTE_REPORT_SENT")
+            && snapshot
+                .viewport
+                .program_status
+                .transitions
+                .iter()
+                .any(|transition| {
+                    transition.cause == zmux_program_status::TransitionCause::Report
+                        && transition.command_epoch.0 == 1
+                        && transition.after_record.as_ref().is_some_and(|record| {
+                            record.state == zmux_program_status::State::Blocked
+                        })
+                })
+    });
+    let frame = Frame {
+        session_id,
+        process_id: Some(1),
+        starting: false,
+        reconnectable: false,
+        snapshot: Some(report),
+        failure: None,
+    };
+    assert!(
+        worker
+            .program_status
+            .observe(&model, &[frame], Instant::now())
+            .is_empty()
+    );
+    assert_eq!(worker.program_status.alert_cursor(), 0);
+
+    worker
+        .slots
+        .get_mut(&session_id)
+        .unwrap()
+        .session
+        .as_mut()
+        .unwrap()
+        .shutdown(Duration::from_secs(5))
+        .unwrap();
+    close_writer(&mut worker);
+}
+
 fn install_ssh_surface(worker: &mut Worker) -> (Uuid, SurfaceId, SessionId) {
     let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let closed_port = probe.local_addr().unwrap().port();

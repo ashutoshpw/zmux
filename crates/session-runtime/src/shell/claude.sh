@@ -42,15 +42,41 @@ zmux_refresh_openers() {
 }
 zmux_refresh_openers
 
-# Bash has no post-startup rc hook. A prompt hook covers later startup changes
-# without editing any user file or replacing their own prompt command.
-if [ -n "${BASH_VERSION-}" ]; then
-    case "${PROMPT_COMMAND-}" in
-        *zmux_refresh_openers*) ;;
-        '') PROMPT_COMMAND=zmux_refresh_openers ;;
-        *) PROMPT_COMMAND="zmux_refresh_openers;${PROMPT_COMMAND}" ;;
+# OSC 133;A is the shell-owned prompt boundary consumed by the terminal's
+# program-status lifetime policy. Keep this separate from provider identity.
+zmux_program_status_prompt() {
+    printf '\033]133;A\007'
+}
+
+# Bash's private rc wrapper calls this again after the user's selected startup
+# file, so a later PROMPT_COMMAND assignment cannot suppress the prompt marker.
+zmux_install_program_status_prompt() {
+    [ -n "${BASH_VERSION-}" ] || return 0
+    case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
+        *zmux_program_status_prompt*) ;;
+        *)
+            case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
+                'declare -a PROMPT_COMMAND='*|'declare -ar PROMPT_COMMAND='*)
+                    # Keep Bash's array syntax inside eval so POSIX shells can
+                    # parse this file even though the branch is Bash-only.
+                    eval 'PROMPT_COMMAND=(zmux_refresh_openers zmux_program_status_prompt "${PROMPT_COMMAND[@]}")'
+                    ;;
+                *)
+                    PROMPT_COMMAND="zmux_refresh_openers;zmux_program_status_prompt${PROMPT_COMMAND:+;${PROMPT_COMMAND}}"
+                    ;;
+            esac
+            ;;
     esac
     export PROMPT_COMMAND
+}
+if [ -n "${BASH_VERSION-}" ]; then
+    zmux_install_program_status_prompt
+fi
+
+# Zsh's hook API composes with user precmd functions and preserves ordering.
+if [ -n "${ZSH_VERSION-}" ]; then
+    autoload -Uz add-zsh-hook
+    add-zsh-hook precmd zmux_program_status_prompt
 fi
 
 if [ -r "${ZMUX_SHELL_INTEGRATION_DIRECTORY-}/provider.sh" ]; then

@@ -43,6 +43,11 @@ function __zmux_refresh_openers_before_prompt --on-event fish_prompt
 end
 __zmux_refresh_openers
 
+# Fish event handlers compose with the user's fish_prompt function.
+function __zmux_program_status_prompt --on-event fish_prompt
+    printf '\e]133;A\a'
+end
+
 if test -r "$ZMUX_SHELL_INTEGRATION_DIRECTORY/provider.fish"
     source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/provider.fish"
 end

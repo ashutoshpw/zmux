@@ -456,6 +456,163 @@ struct AgentLifecycleRecord: Decodable, Sendable, Hashable {
             && providerSessionId == other.providerSessionId
     }
 }
+
+enum ProgramStatusState: String, Decodable, Sendable, Hashable {
+    case idle, working, done, blocked, error
+}
+
+enum ProgramStatusKind: String, Decodable, Sendable, Hashable {
+    case permission, question, auth
+}
+
+enum ProgramStatusSource: String, Decodable, Sendable, Hashable {
+    case osc7501
+}
+
+enum ProgramStatusAvailability: String, Decodable, Sendable, Hashable {
+    case available, unavailable
+}
+
+struct ProgramStatusRecord: Decodable, Sendable, Hashable {
+    let id: String
+    let state: ProgramStatusState
+    let kind: ProgramStatusKind?
+    let progress: UInt8?
+    let app: String?
+    let effectiveApp: String?
+    let msg: String?
+    let title: String?
+}
+
+struct ProgramStatusTerminalIdentity: Decodable, Sendable, Hashable {
+    let identityNamespace: UUID
+    let windowId: UInt64
+    let windowUuid: UUID
+    let workspaceId: UInt64
+    let workspaceUuid: UUID
+    let paneId: UInt64
+    let paneUuid: UUID
+    let surfaceId: UInt64
+    let surfaceUuid: UUID
+    let sessionId: UInt64
+}
+
+struct ProgramStatusTerminal: Decodable, Sendable, Hashable {
+    let source: ProgramStatusSource
+    let availability: ProgramStatusAvailability
+    let identityNamespace: UUID
+    let windowId: UInt64
+    let windowUuid: UUID
+    let workspaceId: UInt64
+    let workspaceUuid: UUID
+    let paneId: UInt64
+    let paneUuid: UUID
+    let surfaceId: UInt64
+    let surfaceUuid: UUID
+    let sessionId: UInt64
+    let sessionEpoch: UInt64
+    let commandEpoch: UInt64
+    let recordCount: UInt16
+    let recordsComplete: Bool
+    let omittedRecords: UInt16
+    let records: [ProgramStatusRecord]
+
+    var identity: ProgramStatusTerminalIdentity {
+        ProgramStatusTerminalIdentity(identityNamespace: identityNamespace,
+            windowId: windowId, windowUuid: windowUuid,
+            workspaceId: workspaceId, workspaceUuid: workspaceUuid,
+            paneId: paneId, paneUuid: paneUuid,
+            surfaceId: surfaceId, surfaceUuid: surfaceUuid, sessionId: sessionId)
+    }
+}
+
+enum ProgramStatusAlertKind: String, Decodable, Sendable, Hashable {
+    case needsUser = "needs_user"
+    case completed
+}
+
+struct ProgramStatusAlertEvent: Decodable, Sendable, Hashable {
+    let cursor: UInt64
+    let identityNamespace: UUID
+    let windowId: UInt64
+    let windowUuid: UUID
+    let workspaceId: UInt64
+    let workspaceUuid: UUID
+    let paneId: UInt64
+    let paneUuid: UUID
+    let surfaceId: UInt64
+    let surfaceUuid: UUID
+    let sessionId: UInt64
+    let sessionEpoch: UInt64
+    let commandEpoch: UInt64
+    let recordId: String
+    let kind: ProgramStatusAlertKind
+    let app: String?
+    let title: String?
+    let message: String?
+
+    var owner: ProgramStatusTerminalIdentity {
+        ProgramStatusTerminalIdentity(identityNamespace: identityNamespace,
+            windowId: windowId, windowUuid: windowUuid,
+            workspaceId: workspaceId, workspaceUuid: workspaceUuid,
+            paneId: paneId, paneUuid: paneUuid,
+            surfaceId: surfaceId, surfaceUuid: surfaceUuid, sessionId: sessionId)
+    }
+}
+
+struct ProgramStatusAlertSnapshot: Decodable, Sendable, Hashable {
+    let epoch: UUID
+    let cursor: UInt64
+    let droppedThroughCursor: UInt64?
+    let events: [ProgramStatusAlertEvent]
+}
+
+struct ProgramSelectionTarget: Codable, Sendable, Hashable {
+    let identityNamespace: UUID
+    let windowId: UInt64
+    let windowUuid: UUID
+    let workspaceId: UInt64
+    let workspaceUuid: UUID
+    let paneId: UInt64
+    let paneUuid: UUID
+    let surfaceId: UInt64
+    let surfaceUuid: UUID
+    let sessionId: UInt64
+    let sessionEpoch: UInt64
+    let commandEpoch: UInt64
+    /// The empty string is the protocol's root-program ID.
+    let id: String
+
+    init(terminal: ProgramStatusTerminal, record: ProgramStatusRecord) {
+        identityNamespace = terminal.identityNamespace
+        windowId = terminal.windowId
+        windowUuid = terminal.windowUuid
+        workspaceId = terminal.workspaceId
+        workspaceUuid = terminal.workspaceUuid
+        paneId = terminal.paneId
+        paneUuid = terminal.paneUuid
+        surfaceId = terminal.surfaceId
+        surfaceUuid = terminal.surfaceUuid
+        sessionId = terminal.sessionId
+        sessionEpoch = terminal.sessionEpoch
+        commandEpoch = terminal.commandEpoch
+        id = record.id
+    }
+
+    func matches(_ terminal: ProgramStatusTerminal) -> Bool {
+        terminal.source == .osc7501
+            && terminal.identity == ProgramStatusTerminalIdentity(
+                identityNamespace: identityNamespace,
+                windowId: windowId, windowUuid: windowUuid,
+                workspaceId: workspaceId, workspaceUuid: workspaceUuid,
+                paneId: paneId, paneUuid: paneUuid,
+                surfaceId: surfaceId, surfaceUuid: surfaceUuid, sessionId: sessionId)
+            && terminal.sessionEpoch == sessionEpoch
+            && terminal.commandEpoch == commandEpoch
+            && terminal.records.contains(where: { $0.id == id })
+    }
+}
+
 struct DesktopSnapshot: Decodable, Sendable {
     let sshRoutes: [SshRouteStatus]
     let workspaceIdentities: [WorkspaceIdentity]
@@ -473,6 +630,10 @@ struct DesktopSnapshot: Decodable, Sendable {
     let persistence: SessionPersistence?
     /// Missing only when reading older snapshots that did not publish lifecycle state.
     let agentLifecycle: [AgentLifecycleRecord]?
+    /// Missing only when reading older snapshots that did not publish OSC program status.
+    let programStatus: [ProgramStatusTerminal]?
+    /// Missing only when reading older snapshots that did not publish admitted OSC alerts.
+    let programStatusAlerts: ProgramStatusAlertSnapshot?
     let cleanupError: String?
     let uploads: [UploadProgress]
     let workspaceMetadata: [WorkspaceMetadata]?

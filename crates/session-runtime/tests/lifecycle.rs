@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
+    os::unix::net::UnixDatagram,
     path::PathBuf,
     process::{Command, Stdio},
     thread,
@@ -56,7 +57,7 @@ fn write_result(receipt: &mut InputReceipt) -> InputWriteResult {
 }
 
 #[test]
-fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events() {
+fn managed_provider_fifo_emits_v4_routes_and_exact_admission_receipts() {
     assert!(
         Command::new("python3")
             .arg("--version")
@@ -110,7 +111,7 @@ fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events
         &mut input,
         &serde_json::json!({
             "kind":"activate",
-            "version":3,
+            "version":4,
             "nonce":nonce,
             "generation":generation,
         }),
@@ -167,7 +168,7 @@ fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events
         .expect("read provider lifecycle frame");
     let provider: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(provider["kind"], "provider_state");
-    assert_eq!(provider["version"], 3);
+    assert_eq!(provider["version"], 4);
     assert_eq!(provider["nonce"], nonce);
     assert_eq!(provider["generation"], generation.to_string());
     assert_eq!(provider["sequence"], 1);
@@ -176,6 +177,186 @@ fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events
     assert_eq!(provider["observation"].as_object().unwrap().len(), 7);
     assert!(!line.contains("foreign"));
     assert!(!line.contains("prompt"));
+
+    let route_id = uuid::Uuid::new_v4();
+    let provider_generation = uuid::Uuid::new_v4();
+    let receipt_path = root.join(format!("p-{}", route_id.simple()));
+    let receipt_endpoint = UnixDatagram::bind(&receipt_path)
+        .expect("bind private remote-local provider-route receipt socket");
+    fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600))
+        .expect("secure private provider-route receipt socket");
+    receipt_endpoint
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let starting_route = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_route": {
+            "provider":"codex",
+            "route_id":route_id,
+            "provider_generation":provider_generation,
+            "phase":"starting"
+        }
+    });
+    serde_json::to_writer(&mut writer, &starting_route).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read v4 provider-route admission frame");
+    let route: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(route["kind"], "provider_route");
+    assert_eq!(route["version"], 4);
+    assert_eq!(route["nonce"], nonce);
+    assert_eq!(route["generation"], generation.to_string());
+    assert_eq!(route["sequence"], 2);
+    assert_eq!(route["provider"], "codex");
+    assert_eq!(route["route_id"], route_id.to_string());
+    assert_eq!(
+        route["provider_generation"],
+        provider_generation.to_string()
+    );
+    assert_eq!(route["phase"], "starting");
+    assert_eq!(route.as_object().unwrap().len(), 9);
+    assert!(!line.contains(receipt_path.to_str().unwrap()));
+
+    serde_json::to_writer(
+        &mut input,
+        &serde_json::json!({
+            "kind":"provider_route_receipt",
+            "version":4,
+            "nonce":nonce,
+            "generation":generation,
+            "route_id":route_id,
+            "accepted":true
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut datagram = [0; 512];
+    let length = receipt_endpoint
+        .recv(&mut datagram)
+        .expect("forward exact Desktop route admission to producer socket");
+    let receipt: serde_json::Value = serde_json::from_slice(&datagram[..length]).unwrap();
+    assert_eq!(receipt["kind"], "provider_route_receipt");
+    assert_eq!(receipt["version"], 4);
+    assert_eq!(
+        receipt["nonce"],
+        uuid::Uuid::parse_str(&nonce).unwrap().to_string()
+    );
+    assert_eq!(receipt["generation"], generation.to_string());
+    assert_eq!(receipt["route_id"], route_id.to_string());
+    assert_eq!(receipt["accepted"], true);
+
+    let ended_route = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_route": {
+            "provider":"codex",
+            "route_id":route_id,
+            "provider_generation":provider_generation,
+            "phase":"ended"
+        }
+    });
+    serde_json::to_writer(&mut writer, &ended_route).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read v4 route retirement frame");
+    let ended: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(ended["kind"], "provider_route");
+    assert_eq!(ended["sequence"], 3);
+    assert_eq!(ended["route_id"], route_id.to_string());
+    assert_eq!(ended["phase"], "ended");
+    drop(receipt_endpoint);
+    fs::remove_file(&receipt_path).expect("remove test-owned provider receipt socket");
+
+    let cancelled_route_id = uuid::Uuid::new_v4();
+    let cancelled_provider_generation = uuid::Uuid::new_v4();
+    let cancelled_receipt_path = root.join(format!("p-{}", cancelled_route_id.simple()));
+    let cancelled_receipt_endpoint = UnixDatagram::bind(&cancelled_receipt_path)
+        .expect("bind private receipt socket for a rejected provider route");
+    fs::set_permissions(&cancelled_receipt_path, fs::Permissions::from_mode(0o600))
+        .expect("secure rejected provider route receipt socket");
+    let starting_cancelled_route = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_route": {
+            "provider":"opencode",
+            "route_id":cancelled_route_id,
+            "provider_generation":cancelled_provider_generation,
+            "phase":"starting"
+        }
+    });
+    serde_json::to_writer(&mut writer, &starting_cancelled_route).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read second v4 provider-route admission frame");
+    let starting: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(starting["kind"], "provider_route");
+    assert_eq!(starting["sequence"], 4);
+    assert_eq!(starting["route_id"], cancelled_route_id.to_string());
+    assert_eq!(starting["phase"], "starting");
+
+    serde_json::to_writer(
+        &mut input,
+        &serde_json::json!({
+            "kind":"provider_route_receipt",
+            "version":4,
+            "nonce":nonce,
+            "generation":generation,
+            "route_id":cancelled_route_id,
+            "accepted":false
+        }),
+    )
+    .unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let mut cancelled_datagram = [0; 512];
+    let cancelled_length = cancelled_receipt_endpoint
+        .recv(&mut cancelled_datagram)
+        .expect("forward exact Desktop rejection to remote provider launcher");
+    let rejected: serde_json::Value =
+        serde_json::from_slice(&cancelled_datagram[..cancelled_length]).unwrap();
+    assert_eq!(rejected["route_id"], cancelled_route_id.to_string());
+    assert_eq!(rejected["accepted"], false);
+
+    let cancelled_route = serde_json::json!({
+        "nonce":nonce,
+        "generation":generation,
+        "provider_route": {
+            "provider":"opencode",
+            "route_id":cancelled_route_id,
+            "provider_generation":cancelled_provider_generation,
+            "phase":"cancelled"
+        }
+    });
+    serde_json::to_writer(&mut writer, &cancelled_route).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+    line.clear();
+    output
+        .read_line(&mut line)
+        .expect("read v4 provider-route reservation cancellation");
+    let cancelled: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(cancelled["kind"], "provider_route");
+    assert_eq!(cancelled["sequence"], 5);
+    assert_eq!(cancelled["route_id"], cancelled_route_id.to_string());
+    assert_eq!(
+        cancelled["provider_generation"],
+        cancelled_provider_generation.to_string()
+    );
+    assert_eq!(cancelled["phase"], "cancelled");
+    drop(cancelled_receipt_endpoint);
+    fs::remove_file(&cancelled_receipt_path)
+        .expect("remove test-owned rejected provider receipt socket");
 
     // Replace the marker while the old stream is still active. Its cleanup
     // must leave the newer attachment's marker untouched.
@@ -199,7 +380,7 @@ fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events
         .expect("read provider evidence gap");
     let gap: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(gap["kind"], "gap");
-    assert_eq!(gap["sequence"], 2);
+    assert_eq!(gap["sequence"], 6);
     assert!(!line.contains("private prompt"));
 
     drop(writer);
@@ -209,6 +390,143 @@ fn managed_provider_fifo_emits_ordered_v3_frames_and_gaps_private_current_events
     assert_eq!(
         fs::read_to_string(&marker).unwrap().trim(),
         next_generation.to_string()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn managed_provider_launch_waits_for_exact_ack_and_falls_back_once_on_reject_or_timeout() {
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let generation = uuid::Uuid::new_v4();
+    let root = PathBuf::from(format!("/tmp/zmux-shell-{nonce}"));
+    fs::create_dir(&root).expect("create private managed shell root");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+        .expect("secure managed shell root");
+    for name in ["agent-events", "agent-events-loss"] {
+        let path = root.join(name);
+        assert!(
+            Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .expect("secure managed lifecycle FIFO");
+    }
+    let generation_path = root.join("agent-lifecycle-generation");
+    fs::write(&generation_path, format!("{generation}\n")).unwrap();
+    fs::set_permissions(&generation_path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(
+        root.join("provider-opencode-plugin.js"),
+        b"export default {};\n",
+    )
+    .unwrap();
+
+    let producer_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/shell/provider-launch.py");
+    let driver = r#"
+import importlib.util,json,os,select,socket,sys,threading,time,types,uuid
+spec=importlib.util.spec_from_file_location("provider_launch",sys.argv[1])
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+root=os.environ["ZMUX_SHELL_INTEGRATION_DIRECTORY"]
+nonce=os.environ["ZMUX_AGENT_LIFECYCLE_NONCE"]
+generation=open(os.path.join(root,"agent-lifecycle-generation"),encoding="ascii").read().strip()
+reader=os.open(os.path.join(root,"agent-events"),os.O_RDONLY|os.O_NONBLOCK)
+writer_hold=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK)
+pending=bytearray()
+def next_frame(timeout=3.0):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        if b"\n" in pending:
+            line,_,rest=pending.partition(b"\n");pending[:]=rest
+            return json.loads(line)
+        ready,_,_=select.select([reader],[],[],max(0,deadline-time.monotonic()))
+        if ready: pending.extend(os.read(reader,4096))
+    raise AssertionError("provider route FIFO event timed out")
+class Child:
+    returncode=0
+    def poll(self): return 0
+    def wait(self): return 0
+class FakeProcess:
+    def __init__(self): self.spawned=[];self.commands=[];self.fail_spawn=False
+    def Popen(self,argv,env=None):
+        if self.fail_spawn: raise OSError("synthetic pre-spawn failure")
+        self.spawned.append(list(argv));return Child()
+    def run(self,argv):
+        self.commands.append(list(argv))
+        return types.SimpleNamespace(returncode=23)
+class FakeServer:
+    def __init__(self,executable): pass
+    def rpc(self,method,params): return {"config":{"hooks":{}}}
+    def close(self): pass
+m.shutil.which=lambda name:"/fake/"+name
+m.AppServer=FakeServer
+m.PROVIDER_ROUTE_RECEIPT_TIMEOUT=0.20
+m.interactive_opencode=lambda args: True
+m.expected_opencode_session=lambda args: None
+m.bounded_command_output=lambda *args,**kwargs:b"--standalone"
+m.advertises_option=lambda output,option:True
+def run_case(provider,disposition):
+    fake=FakeProcess();fake.fail_spawn=disposition=="spawn-fail";m.subprocess=fake
+    result=[]
+    def launch():
+        result.append(m.run_codex([],root) if provider=="codex" else m.run_opencode([],root))
+    worker=threading.Thread(target=launch);worker.start()
+    start=next_frame()
+    assert start["provider_route"]["phase"]=="starting",start
+    route=start["provider_route"]
+    assert route["provider"]==provider
+    assert route["provider_generation"] and route["route_id"]
+    assert not fake.spawned and not fake.commands, "provider spawned before Desktop admission"
+    receipt_path=os.path.join(root,"p-"+uuid.UUID(route["route_id"]).hex)
+    if disposition in ("accept","spawn-fail"):
+        endpoint=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+        endpoint.sendto(json.dumps({"kind":"provider_route_receipt","version":4,
+            "nonce":str(uuid.UUID(nonce)),"generation":generation,
+            "route_id":route["route_id"],"accepted":True},separators=(",",":")).encode(),receipt_path)
+        endpoint.close()
+    elif disposition=="reject":
+        endpoint=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+        endpoint.sendto(json.dumps({"kind":"provider_route_receipt","version":4,
+            "nonce":str(uuid.UUID(nonce)),"generation":generation,
+            "route_id":route["route_id"],"accepted":False},separators=(",",":")).encode(),receipt_path)
+        endpoint.close()
+    worker.join(3)
+    assert not worker.is_alive(), "provider launch did not leave bounded admission wait"
+    retired=next_frame()
+    expected_phase="ended" if disposition=="accept" else "cancelled"
+    assert retired["provider_route"]["phase"]==expected_phase,retired
+    assert retired["provider_route"]["route_id"]==route["route_id"]
+    assert retired["provider_route"]["provider_generation"]==route["provider_generation"]
+    if disposition=="accept":
+        assert result==[0],result
+        assert len(fake.spawned)==1 and not fake.commands,(fake.spawned,fake.commands)
+        if provider=="opencode": assert "--standalone" in fake.spawned[0]
+        else: assert "hooks.SessionStart=" in " ".join(fake.spawned[0])
+    else:
+        assert result==[23],result
+        assert not fake.spawned and fake.commands==[["/fake/"+provider]],(fake.spawned,fake.commands)
+for provider in ("codex","opencode"):
+    run_case(provider,"accept")
+    run_case(provider,"reject")
+    run_case(provider,"timeout")
+    run_case(provider,"spawn-fail")
+os.close(reader);os.close(writer_hold)
+"#;
+    let status = Command::new("python3")
+        .arg("-c")
+        .arg(driver)
+        .arg(&producer_path)
+        .env("ZMUX_SHELL_INTEGRATION_DIRECTORY", &root)
+        .env("ZMUX_AGENT_LIFECYCLE_NONCE", &nonce)
+        .output()
+        .expect("run the production managed provider launcher with bounded fakes");
+    assert!(
+        status.status.success(),
+        "managed provider launcher contract failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
     );
     fs::remove_dir_all(root).unwrap();
 }

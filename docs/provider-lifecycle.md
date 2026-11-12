@@ -5,6 +5,17 @@ or managed SSH terminal. It attaches lifecycle state to that exact existing
 terminal. It does not create a terminal, send prompts, approve permissions, or
 install a global provider hook or plugin.
 
+OSC 7501 program status is a separate, self-reported source and does not
+authenticate or create provider identity. Per-command alert source arbitration
+does not match provider and OSC messages across protocols; generic OSC 9/777
+notices retain their existing path. See the [OSC 7501 guide](program-status.md).
+
+Managed shell startup transfers its trusted bootstrap as a bounded gzip and
+Base64 payload. The target host needs `gzip` and `base64` (`-d` or BSD `-D`) to
+enable integration; if either utility is unavailable, Zmux prints a diagnostic
+and starts the original shell arguments without integration. Decoding does not
+add a Python 3 requirement.
+
 Tracking starts only after the shell integration verifies the terminal's exact
 Zmux route. This associates evidence with the terminal, but does not
 authenticate the provider process. Unsupported commands and failed preflight keep their original

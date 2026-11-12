@@ -478,6 +478,7 @@ impl Desktop {
                 self.send(crate::Envelope {
                     request,
                     acknowledgement: Some(sender),
+                    cancellation: None,
                     authorization: None,
                     reply_deadline: None,
                     shared_terminal: Some(SharedTerminalAuthorization {
@@ -693,6 +694,7 @@ mod tests {
                     },
                 },
                 acknowledgement: Some(acknowledgement),
+                cancellation: None,
                 authorization: None,
                 reply_deadline: None,
                 shared_terminal: Some(SharedTerminalAuthorization {
@@ -742,6 +744,7 @@ mod tests {
                     },
                 },
                 acknowledgement: Some(acknowledgement),
+                cancellation: None,
                 authorization: None,
                 reply_deadline: None,
                 shared_terminal: Some(revoked_authorization),

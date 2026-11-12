@@ -5,15 +5,19 @@ import json
 from pathlib import Path
 import sys
 
-from verify import (HERE, REPO, Rejected, checked_file, document, read_bounded,
+from verify import (HERE, REPO, Rejected, checked_file, digest, document, read_bounded,
                     verify_candidate)
 from darwin_platform import inspect_darwin_archive
+from candidate_sets import (HISTORICAL, VERSIONED_7501, load_linkage_manifest,
+                            load_source_manifest, source_manifest_repo_path,
+                            validate_source_candidate_files,
+                            validate_versioned_linkage)
 
 
-def accept(root, target):
+def accept(root, target, candidate_set=HISTORICAL):
     root = root.resolve(strict=True)
-    manifest = document(HERE / "linkage-candidates.json")
-    inputs = []
+    linkage_manifest, manifest = load_linkage_manifest(candidate_set)
+    inputs = [str(linkage_manifest.resolve())]
 
     def check(base, name, expected, limit=1024 * 1024):
         data = checked_file(base, name, expected, limit)
@@ -23,6 +27,8 @@ def accept(root, target):
     for name, expected in manifest["shim_inputs_sha256"].items():
         check(REPO, name, expected)
     if target == "x86_64-unknown-linux-gnu":
+        if candidate_set != HISTORICAL:
+            raise Rejected("this candidate set has no accepted Linux library")
         library = root / "install/lib/libghostty-vt.a"
         producer = root / "receipt.json"
         verify_candidate(library, producer, "linux-x86_64")
@@ -39,7 +45,8 @@ def accept(root, target):
         accepted = manifest["darwin"]
         original = root / "original-upload/terminal-engine-artifacts"
         bundle = original / "bundle"
-        receipt = json.loads(check(original, "receipt.json", accepted["producer_sha256"]))
+        receipt_bytes = check(original, "receipt.json", accepted["producer_sha256"])
+        receipt = json.loads(receipt_bytes)
         check(root, "independent-review.json", accepted["independent_review_sha256"])
         if receipt["state"] != "complete" or receipt["source_sha"] != accepted["source_sha"]:
             raise Rejected("Darwin producer identity/state differs")
@@ -54,11 +61,42 @@ def accept(root, target):
                 check(root / "supplemental-source", name, expected)
             else:
                 check(bundle / "sources/repository", name, expected)
+        source_manifest_sha256 = None
+        if candidate_set != HISTORICAL:
+            source_pin = manifest.get("source_candidate")
+            source_name = source_manifest_repo_path(candidate_set)
+            if not isinstance(source_pin, dict) or source_pin.get("path") != source_name:
+                raise Rejected("versioned linkage candidate source path differs")
+            source_manifest, source_document = load_source_manifest(candidate_set)
+            validate_source_candidate_files(candidate_set, source_document)
+            inputs.extend(str(path.resolve()) for path in (
+                source_manifest,
+                REPO / "tools/terminal-engine-artifacts/candidate.json",
+                REPO / "tools/terminal-engine-artifacts/upstream-inputs.json",
+                REPO / "tools/terminal-engine-artifacts/darwin-recipe.json",
+                *(REPO / name for name in source_document["source_inputs_sha256"]),
+            ))
+            source_bytes = checked_file(bundle / "sources/repository", source_name,
+                                        source_pin["sha256"])
+            validate_versioned_linkage(
+                candidate_set, manifest, receipt,
+                source_manifest=source_document,
+                source_manifest_sha256=digest(source_bytes),
+                producer_sha256=digest(receipt_bytes))
+            source_manifest_sha256 = digest(source_bytes)
         for name, expected in receipt["headers_sha256"].items():
             check(bundle, name, expected)
         architecture = "arm64" if target.startswith("aarch64") else "x86_64"
         library = bundle / architecture / "libghostty-vt.a"
-        check(bundle, f"{architecture}/libghostty-vt.a", accepted["libraries"][target], 64 * 1024 * 1024)
+        library_bytes = check(bundle, f"{architecture}/libghostty-vt.a",
+                              accepted["libraries"][target], 64 * 1024 * 1024)
+        if candidate_set != HISTORICAL:
+            validate_versioned_linkage(
+                candidate_set, manifest, receipt,
+                source_manifest=source_document,
+                source_manifest_sha256=source_manifest_sha256,
+                target=target, library_sha256=digest(library_bytes),
+                producer_sha256=digest(receipt_bytes))
         inspect_darwin_archive(library, architecture)
         include_root = bundle
     else:
@@ -72,9 +110,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--candidate-set", choices=(HISTORICAL, VERSIONED_7501),
+                        default=HISTORICAL)
     args = parser.parse_args()
     try:
-        print(json.dumps(accept(args.root, args.target)))
+        print(json.dumps(accept(args.root, args.target, args.candidate_set)))
     except (Rejected, OSError, ValueError, KeyError, TypeError) as error:
         print(f"linkage artifact rejected: {error}", file=sys.stderr)
         return 1

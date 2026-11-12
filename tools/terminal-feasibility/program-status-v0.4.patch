@@ -1,0 +1,364 @@
+diff --git a/src/terminal/osc.zig b/src/terminal/osc.zig
+--- a/src/terminal/osc.zig
++++ b/src/terminal/osc.zig
+@@ -761,11 +761,12 @@
+                 .@"7" => 7,
+                 .@"9" => 9,
+                 .@"777" => 777,
++                .@"7501" => 7501,
+                 else => null,
+             };
+             if (number) |source| {
+                 self.zmux_metadata_source = source;
+-                const prefix: usize = if (source == 777) 4 else 2;
++                const prefix: usize = if (source == 777) 4 else if (source == 7501) 5 else 2;
+                 Capture.allocating(&self.capture, self.alloc.?, self.zmux_metadata_limit - prefix + 1) catch {
+                     self.zmux_metadata_status = 4;
+                     self.state = .invalid;
+@@ -882,6 +883,13 @@
+         if (self.zmux_metadata_status < 3 or self.zmux_metadata_reported) return null;
+         self.zmux_metadata_reported = true;
+         return .{ .source = source, .status = self.zmux_metadata_status };
++    }
++
++    /// True while the authoritative OSC capture owns a Program Status report.
++    /// Stream uses this to defer ESC termination until the following byte
++    /// confirms the required ST backslash.
++    pub fn zmuxProgramStatusCapture(self: *const Parser) bool {
++        return self.zmux_metadata_source == 7501;
+     }
+ 
+     /// Consume a slice of bytes, advancing the parser state. This is
+@@ -1180,6 +1188,7 @@
+                 .@"7" => 7,
+                 .@"9" => 9,
+                 .@"777" => 777,
++                .@"7501" => 7501,
+                 else => null,
+             };
+             if (source) |number| {
+@@ -1364,6 +1373,34 @@
+     try testing.expectEqualStrings("title", cmd.change_window_title);
+ }
+ 
++test "Zmux metadata captures raw OSC 7501 arguments and terminators" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++    p.zmux_metadata_limit = 4096;
++
++    const arguments = "state=working:id=worker:app=build_tool=x";
++    for ("7501;" ++ arguments) |byte| p.next(byte);
++    const bel = p.end(std.ascii.control_code.bel).?.*;
++    try testing.expect(bel == .zmux_metadata);
++    try testing.expectEqual(@as(u32, 7501), bel.zmux_metadata.source);
++    try testing.expectEqual(@as(u32, 0), bel.zmux_metadata.status);
++    try testing.expectEqual(@as(u32, 7), bel.zmux_metadata.terminator);
++    try testing.expectEqualStrings(arguments, bel.zmux_metadata.payload);
++
++    p.reset();
++    const split_arguments = "state=blocked:kind=question:id=dialog";
++    p.nextSlice("7501;");
++    p.nextSlice("state=blocked:kind=");
++    p.nextSlice("question:id=dialog");
++    const st = p.end(std.ascii.control_code.esc).?.*;
++    try testing.expect(st == .zmux_metadata);
++    try testing.expectEqual(@as(u32, 7501), st.zmux_metadata.source);
++    try testing.expectEqual(@as(u32, 27), st.zmux_metadata.terminator);
++    try testing.expectEqualStrings(split_arguments, st.zmux_metadata.payload);
++}
++
+ test "Parser allocating captures have a hard limit" {
+     const testing = std.testing;
+     const prefixes = [_][]const u8{ "52;", "66;", "72;", "99;", "5522;" };
+diff --git a/src/terminal/stream.zig b/src/terminal/stream.zig
+--- a/src/terminal/stream.zig
++++ b/src/terminal/stream.zig
+@@ -531,6 +531,7 @@
+         parser: Parser,
+         utf8decoder: UTF8Decoder,
+         continuation: ?continuationpkg.Tracker,
++        pending_zmux_osc_escape: bool,
+ 
+         pub const Options = struct {
+             /// The handler initial value, must be set.
+@@ -591,6 +592,7 @@
+                 .parser = parser,
+                 .utf8decoder = .{},
+                 .continuation = tracker,
++                .pending_zmux_osc_escape = false,
+             };
+         }
+ 
+@@ -691,6 +693,12 @@
+ 
+             // Process UTF-8 if we're within that state.
+             var offset: usize = 0;
++            if (self.pending_zmux_osc_escape) {
++                if (offset >= input.len) return null;
++                self.pending_zmux_osc_escape = false;
++                self.resolveZMuxOscEscape(input[offset]);
++                offset += 1;
++            }
+             while (self.utf8decoder.state != 0) {
+                 if (offset >= input.len) return null;
+                 self.nextUtf8(input[offset]);
+@@ -739,6 +747,12 @@
+             assert(input.len <= cp_buf.len);
+ 
+             var offset: usize = 0;
++            if (self.pending_zmux_osc_escape) {
++                if (offset >= input.len) return;
++                self.pending_zmux_osc_escape = false;
++                self.resolveZMuxOscEscape(input[offset]);
++                offset += 1;
++            }
+ 
+             // If the scalar UTF-8 decoder was in the middle of processing
+             // a code sequence, we continue until it's not.
+@@ -947,6 +961,16 @@
+                             // ST ("ESC \"); the "\" that should follow is
+                             // dispatched as a normal escape sequence.
+                             std.ascii.control_code.esc => {
++                                if (self.parser.osc_parser.zmuxProgramStatusCapture()) {
++                                    offset += 1;
++                                    if (offset >= input.len) {
++                                        self.pending_zmux_osc_escape = true;
++                                        continue;
++                                    }
++                                    self.resolveZMuxOscEscape(input[offset]);
++                                    offset += 1;
++                                    continue;
++                                }
+                                 if (self.parser.osc_parser.end(
+                                     std.ascii.control_code.esc,
+                                 )) |cmd| self.oscDispatch(cmd.*);
+@@ -1171,6 +1195,18 @@
+         }
+ 
+         inline fn nextUntracked(self: *Self, c: u8) void {
++            if (self.pending_zmux_osc_escape) {
++                self.pending_zmux_osc_escape = false;
++                self.resolveZMuxOscEscape(c);
++                return;
++            }
++            if (self.parser.state == .osc_string and
++                c == std.ascii.control_code.esc and
++                self.parser.osc_parser.zmuxProgramStatusCapture())
++            {
++                self.pending_zmux_osc_escape = true;
++                return;
++            }
+             // The scalar path can be responsible for decoding UTF-8.
+             if (self.parser.state == .ground) {
+                 self.nextUtf8(c);
+@@ -1178,6 +1214,20 @@
+             }
+ 
+             self.nextNonUtf8(c);
++        }
++
++        /// Defer an OSC 7501 ESC until the next byte proves ST. A non-backslash
++        /// byte cancels the status report, then continues through the existing
++        /// escape parser exactly as before. No payload is reparsed or copied.
++        fn resolveZMuxOscEscape(self: *Self, next_byte: u8) void {
++            const terminator: u8 = if (next_byte == '\\')
++                std.ascii.control_code.esc
++            else
++                std.ascii.control_code.can;
++            if (self.parser.osc_parser.end(terminator)) |cmd| self.oscDispatch(cmd.*);
++            self.parser.clear();
++            self.parser.state = .escape;
++            self.nextNonUtf8(next_byte);
+         }
+ 
+         /// Process the next byte and print as necessary.
+diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
+--- a/src/terminal/stream_terminal.zig
++++ b/src/terminal/stream_terminal.zig
+@@ -766,7 +766,7 @@
+             // Unrecognized OSC. The OSC parser already dropped aborted
+             // sequences, so everything that reaches here is reported.
+             .osc_unknown => self.unknownSequence(.{ .osc = value }),
+-            .zmux_metadata => if (self.effects.zmux_metadata) |func| func(self, value),
++            .zmux_metadata => self.zmuxMetadata(value),
+ 
+             // Effect-based handlers
+             .bell => self.bell(),
+@@ -986,6 +986,18 @@
+                 }
+             },
+         }
++    }
++
++    fn zmuxMetadata(self: *Handler, event: osc.ZmuxMetadata) void {
++        const func = self.effects.zmux_metadata orelse return;
++        if (event.source == 7501 and event.status == 0 and
++            std.mem.eql(u8, event.payload, "?"))
++        {
++            const terminator: osc.Terminator = if (event.terminator == 7) .bel else .st;
++            self.writePty("\x1b]7501;" ++ osc.program_status.query_reply);
++            self.writePty(terminator.string());
++        }
++        func(self, event);
+     }
+ 
+     fn programStatusReport(
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -1058,11 +1058,25 @@
+     wrapper.zmux_metadata_callback = callback;
+     wrapper.stream.parser.osc_parser.zmux_metadata_limit = cap;
+     wrapper.stream.handler.effects.zmux_metadata = &zmuxMetadataTrampoline;
++    wrapper.stream.handler.effects.semantic_prompt = &zmuxSemanticPromptTrampoline;
++    wrapper.stream.handler.effects.reset = &zmuxRisTrampoline;
+     // Only OSC 7 is an accepted migration cwd source. Other upstream PWD
+     // sources remain explicitly ignored and cannot populate clipped getters.
+     return .success;
+ }
+ fn zmuxMetadataTrampoline(handler: *Handler, value: osc.ZmuxMetadata) void {
++    emitZmuxMetadata(handler, value);
++}
++fn zmuxSemanticPromptTrampoline(handler: *Handler, value: Handler.SemanticPrompt) void {
++    Effects.semanticPromptTrampoline(handler, value);
++    if (value.kind != .prompt_start) return;
++    emitZmuxMetadata(handler, .{ .source = 133, .subcommand = 1 });
++}
++fn zmuxRisTrampoline(handler: *Handler) void {
++    Effects.resetTrampoline(handler);
++    emitZmuxMetadata(handler, .{ .source = 133, .subcommand = 2 });
++}
++fn emitZmuxMetadata(handler: *Handler, value: osc.ZmuxMetadata) void {
+     const wrapper = TerminalWrapper.fromHandler(handler);
+     const callback = wrapper.zmux_metadata_callback orelse return;
+     var event = value.cval();
+@@ -2254,6 +2268,127 @@
+     free(t);
+ }
+ 
++test "zmux metadata captures raw OSC, prompt and RIS without replacing callbacks" {
++    const Capture = struct {
++        const Self = @This();
++
++        count: usize = 0,
++        sources: [8]u32 = undefined,
++        subcommands: [8]u32 = undefined,
++        statuses: [8]u32 = undefined,
++        terminators: [8]u32 = undefined,
++        payloads: [8][128]u8 = undefined,
++        payload_lengths: [8]usize = undefined,
++        replies: [256]u8 = undefined,
++        reply_length: usize = 0,
++        prompt_callback_count: usize = 0,
++        reset_callback_count: usize = 0,
++
++        fn metadata(ctx: ?*anyopaque, value: *const osc.ZmuxMetadata.C) callconv(lib.calling_conv) void {
++            const self: *Self = @ptrCast(@alignCast(ctx.?));
++            if (self.count >= self.sources.len or value.payload.len > self.payloads[0].len)
++                @panic("test capture capacity exceeded");
++            const index = self.count;
++            self.sources[index] = value.source;
++            self.subcommands[index] = value.subcommand;
++            self.statuses[index] = value.status;
++            self.terminators[index] = value.terminator;
++            self.payload_lengths[index] = value.payload.len;
++            @memcpy(self.payloads[index][0..value.payload.len], value.payload.ptr[0..value.payload.len]);
++            self.count += 1;
++        }
++
++        fn writePty(_: Terminal, ctx: ?*anyopaque, ptr: [*]const u8, len: usize) callconv(lib.calling_conv) void {
++            const self: *Self = @ptrCast(@alignCast(ctx.?));
++            if (len > self.replies.len - self.reply_length) @panic("test reply capture capacity exceeded");
++            @memcpy(self.replies[self.reply_length..][0..len], ptr[0..len]);
++            self.reply_length += len;
++        }
++
++        fn semanticPrompt(_: Terminal, ctx: ?*anyopaque, event: *const SemanticPrompt) callconv(lib.calling_conv) void {
++            const self: *Self = @ptrCast(@alignCast(ctx.?));
++            if (event.kind == SemanticPromptKind.prompt_start) self.prompt_callback_count += 1;
++        }
++
++        fn reset(_: Terminal, ctx: ?*anyopaque) callconv(lib.calling_conv) void {
++            const self: *Self = @ptrCast(@alignCast(ctx.?));
++            self.reset_callback_count += 1;
++        }
++    };
++
++    var capture: Capture = .{};
++    var t: Terminal = null;
++    const allocator = &lib.alloc.test_allocator;
++    try testing.expectEqual(Result.success, zmux_new_metadata_bounded(
++        allocator,
++        allocator,
++        &t,
++        80,
++        24,
++        100,
++        4096,
++        &capture,
++        &Capture.metadata,
++    ));
++    defer free(t);
++    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&capture)));
++    try testing.expectEqual(Result.success, set(t, .write_pty, @ptrCast(&Capture.writePty)));
++    try testing.expectEqual(Result.success, set(t, .semantic_prompt, @ptrCast(&Capture.semanticPrompt)));
++    try testing.expectEqual(Result.success, set(t, .reset, @ptrCast(&Capture.reset)));
++
++    const bel = "\x1b]7501;state=working:id=worker\x07";
++    vt_write(t, bel.ptr, bel.len);
++    try testing.expectEqual(@as(usize, 1), capture.count);
++    try testing.expectEqual(@as(u32, 7501), capture.sources[0]);
++    try testing.expectEqual(@as(u32, 7), capture.terminators[0]);
++    try testing.expectEqualStrings("state=working:id=worker", capture.payloads[0][0..capture.payload_lengths[0]]);
++
++    // ST may split at any PTY read boundary. The ESC is withheld until the
++    // following byte confirms the backslash terminator.
++    const split_st_prefix = "\x1b]7501;state=done:id=worker\x1b";
++    vt_write(t, split_st_prefix.ptr, split_st_prefix.len);
++    try testing.expectEqual(@as(usize, 1), capture.count);
++    vt_write(t, "\\", 1);
++    try testing.expectEqual(@as(usize, 2), capture.count);
++    try testing.expectEqual(@as(u32, 27), capture.terminators[1]);
++    try testing.expectEqualStrings("state=done:id=worker", capture.payloads[1][0..capture.payload_lengths[1]]);
++
++    // A bare ESC cancels this OSC 7501 report and resumes the existing CSI
++    // parser for the following bytes.
++    const invalid_st = "\x1b]7501;state=error:id=discard\x1b[31m";
++    vt_write(t, invalid_st.ptr, invalid_st.len);
++    try testing.expectEqual(@as(usize, 3), capture.count);
++    try testing.expectEqual(@as(u32, 7501), capture.sources[2]);
++    try testing.expectEqual(@as(u32, 1), capture.statuses[2]);
++    try testing.expectEqual(@as(u32, 24), capture.terminators[2]);
++
++    const query_and_da = "\x1b]7501;?\x07\x1b[c";
++    vt_write(t, query_and_da.ptr, query_and_da.len);
++    try testing.expectEqual(@as(usize, 4), capture.count);
++    try testing.expectEqualStrings("?", capture.payloads[3][0..capture.payload_lengths[3]]);
++    const expected_reply = "\x1b]7501;" ++ osc.program_status.query_reply ++ "\x07\x1b[?62;22c";
++    try testing.expectEqualStrings(expected_reply, capture.replies[0..capture.reply_length]);
++
++    const prompt = "\x1b]133;A\x07";
++    vt_write(t, prompt.ptr, prompt.len);
++    try testing.expectEqual(@as(usize, 5), capture.count);
++    try testing.expectEqual(@as(u32, 133), capture.sources[4]);
++    try testing.expectEqual(@as(u32, 1), capture.subcommands[4]);
++    try testing.expectEqual(@as(usize, 1), capture.prompt_callback_count);
++
++    const decstr = "\x1b[!p";
++    vt_write(t, decstr.ptr, decstr.len);
++    try testing.expectEqual(@as(usize, 5), capture.count);
++    try testing.expectEqual(@as(usize, 0), capture.reset_callback_count);
++
++    const ris = "\x1bc";
++    vt_write(t, ris.ptr, ris.len);
++    try testing.expectEqual(@as(usize, 6), capture.count);
++    try testing.expectEqual(@as(u32, 133), capture.sources[5]);
++    try testing.expectEqual(@as(u32, 2), capture.subcommands[5]);
++    try testing.expectEqual(@as(usize, 1), capture.reset_callback_count);
++}
++
+ test "new invalid value" {
+     var t: Terminal = null;
+ 

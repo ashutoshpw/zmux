@@ -3,6 +3,7 @@ use crate::{
     metadata::{MetaRecord, MetaState},
 };
 use std::{ffi::c_void, marker::PhantomData, mem::size_of, ptr::NonNull, rc::Rc};
+use zmux_program_status::{ProgramStatusSnapshot, SessionEpoch};
 
 const CELLS: usize = 120 * 240;
 const TEXT: usize = 512 * 1024;
@@ -18,6 +19,9 @@ pub enum Error {
     Failed,
     EngineConstruction,
     Unsupported(u32),
+    ProgramStatusAllocation,
+    ProgramStatusLifecycle,
+    ProgramStatusSnapshot,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -136,6 +140,16 @@ impl Engine {
         Ok(output)
     }
     pub fn new(cols: u16, rows: u16, history: usize, limits: Limits) -> Result<Self, Error> {
+        Self::new_with_session_epoch(cols, rows, history, limits, SessionEpoch(0))
+    }
+
+    pub fn new_with_session_epoch(
+        cols: u16,
+        rows: u16,
+        history: usize,
+        limits: Limits,
+        session_epoch: SessionEpoch,
+    ) -> Result<Self, Error> {
         if cols == 0
             || cols > 240
             || rows == 0
@@ -155,8 +169,8 @@ impl Engine {
         let replies = buffer(REPLIES)?;
         let records = buffer(EVENTS)?;
         let bytes = buffer(META_BYTES)?;
-        let state = MetaState::new()?;
-        let next_state = MetaState::new()?;
+        let state = MetaState::new(session_epoch)?;
+        let next_state = MetaState::new(session_epoch)?;
         // SAFETY: validated scalar bounds; C retains no Rust-owned pointer.
         let metadata = NonNull::new(unsafe {
             zmux_vt_new(
@@ -301,7 +315,7 @@ impl Engine {
         {
             return Err(Error::Invalid);
         }
-        self.next_state.copy_from(&self.state);
+        self.next_state.copy_from(&self.state)?;
         let (mut reply, mut metadata, mut bytes) = (0usize, 0usize, 0usize);
         for event in &self.events[..self.batch.event_length] {
             match event.kind {
@@ -444,6 +458,30 @@ impl Engine {
                 let (title, body) = state.notice_text(i);
                 (n.sequence, n.source, title, body)
             })
+    }
+
+    pub fn program_status_snapshot(&self) -> Result<ProgramStatusSnapshot, Error> {
+        self.metadata_state().program_status_snapshot()
+    }
+
+    pub fn attached_child_exited(&mut self) -> Result<(), Error> {
+        if self.failed {
+            return Err(Error::Failed);
+        }
+        if !self.staged {
+            return Err(Error::Invalid);
+        }
+        self.next_state.attached_child_exited()
+    }
+
+    pub fn terminal_closed_status_snapshot(&mut self) -> Result<ProgramStatusSnapshot, Error> {
+        if self.staged {
+            return Err(Error::Pending);
+        }
+        // Closing only updates committed Rust metadata. Session shutdown aborts
+        // the C engine first; that permanent failure must still allow clearing
+        // records without accessing the engine or publishing a cancelled batch.
+        self.state.program_status.terminal_closed_snapshot()
     }
 
     /// Caller must first finish every causal reply's physical PTY write, preserving

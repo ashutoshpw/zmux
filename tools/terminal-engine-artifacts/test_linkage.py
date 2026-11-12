@@ -8,9 +8,12 @@ import stat
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 import warnings
 import zipfile
 
+import candidate_sets
+from candidate_sets import HISTORICAL, VERSIONED_7501
 from verify import Rejected, digest
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +23,286 @@ SPEC.loader.exec_module(linkage)
 
 
 class RetainedLinkageChecks(unittest.TestCase):
+    @staticmethod
+    def write_json(path, document):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, indent=2) + "\n")
+
+    @staticmethod
+    def read_json(path):
+        return json.loads(path.read_text())
+
+    def make_versioned_fixture(self, root):
+        repository = root / "repository"
+        inventory = repository / "tools/terminal-engine-artifacts"
+        source_path = inventory / "candidate-sets/ghostty-7501-v1/source.json"
+        linkage_path = inventory / "candidate-sets/ghostty-7501-v1/linkage.json"
+
+        baseline_path = inventory / "candidate.json"
+        upstream_path = inventory / "upstream-inputs.json"
+        recipe_path = inventory / "darwin-recipe.json"
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_bytes(b'{"schema_version":1}\n')
+        upstream_path.write_bytes(b'{"schema_version":1}\n')
+        recipe = {
+            "schema_version": 1,
+            "xcode_version": "16.4",
+            "sdk_version": "15.5",
+            "rust_version": "1.95.0",
+            "minimum_macos": "14.0",
+        }
+        self.write_json(recipe_path, recipe)
+
+        patch_paths = [
+            "tools/terminal-feasibility/resource.patch",
+            "tools/terminal-feasibility/metadata.patch",
+            "tools/terminal-feasibility/program-status-v0.4.patch",
+        ]
+        source_inputs = {}
+        for name in patch_paths + ["tools/terminal-feasibility/program-status-consumer.h"]:
+            data = ("fixture input: " + name + "\n").encode()
+            path = repository / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            source_inputs[name] = digest(data)
+        source_manifest = {
+            "schema_version": 1,
+            "candidate_kind": "source",
+            "candidate_set": VERSIONED_7501,
+            "base_candidate_sha256": digest(baseline_path.read_bytes()),
+            "upstream_inputs_sha256": digest(upstream_path.read_bytes()),
+            "recipe_sha256": digest(recipe_path.read_bytes()),
+            "source_inputs_sha256": source_inputs,
+            "patches": [{"path": name, "sha256": source_inputs[name]} for name in patch_paths],
+            "post_patch_headers_sha256": {
+                "include/ghostty/vt/zmux_metadata.h": digest(b"patched header fixture\n"),
+            },
+        }
+        self.write_json(source_path, source_manifest)
+        source_pin = {
+            "candidate_set": VERSIONED_7501,
+            "path": "tools/terminal-engine-artifacts/candidate-sets/ghostty-7501-v1/source.json",
+            "sha256": digest(source_path.read_bytes()),
+        }
+
+        review_path = inventory / "evidence/versioned-independent-review.json"
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        review_bytes = b'{"review_fixture":"temporary test input"}\n'
+        review_path.write_bytes(review_bytes)
+        source_sha = digest(b"source revision fixture")[:40]
+        linkage_manifest = {
+            "schema_version": 1,
+            "candidate_kind": "accepted_linkage",
+            "candidate_set": VERSIONED_7501,
+            "scope": "temporary production-validator fixture",
+            "source_candidate": source_pin,
+            "darwin": {
+                "producer_sha256": digest(b"producer receipt fixture"),
+                "library_recipe_sha256": digest(b"library recipe fixture"),
+                "supplement": {},
+                "independent_review_path": "evidence/versioned-independent-review.json",
+                "independent_review_sha256": digest(review_bytes),
+                "source_sha": source_sha,
+                "libraries": {
+                    "aarch64-apple-darwin": digest(b"arm64 library fixture"),
+                    "x86_64-apple-darwin": digest(b"x86_64 library fixture"),
+                },
+                "download": {
+                    "repository": "ashutoshpw/zmux",
+                    "run": 92000123456,
+                    "artifact": 92000654321,
+                    "name": "terminal-engine-darwin-thin-" + source_sha,
+                    "archive_sha256": digest(b"download archive fixture"),
+                    "archive_bytes": len(b"download archive fixture"),
+                },
+            },
+            "shim_inputs_sha256": {},
+        }
+        self.write_json(linkage_path, linkage_manifest)
+        return {
+            "repository": repository,
+            "inventory": inventory,
+            "source_path": source_path,
+            "linkage_path": linkage_path,
+        }
+
+    def check_versioned_fixture(self, fixture):
+        with (patch.object(linkage, "HERE", fixture["inventory"]),
+              patch.object(linkage, "REPO", fixture["repository"]),
+              patch.object(candidate_sets, "REPO", fixture["repository"]),
+              patch.dict(candidate_sets.SOURCE_MANIFESTS, {VERSIONED_7501: fixture["source_path"]}),
+              patch.dict(candidate_sets.LINKAGE_MANIFESTS, {VERSIONED_7501: fixture["linkage_path"]})):
+            return linkage.check_inputs(VERSIONED_7501)
+
+    def test_check_inputs_accepts_well_formed_versioned_manifest_with_fresh_ids(self):
+        with tempfile.TemporaryDirectory(prefix="zmux-versioned-linkage-") as temporary:
+            fixture = self.make_versioned_fixture(Path(temporary))
+            accepted, _ = self.check_versioned_fixture(fixture)
+            self.assertEqual(accepted["download"]["run"], 92000123456)
+            self.assertEqual(accepted["download"]["artifact"], 92000654321)
+            self.assertEqual(set(accepted["libraries"]), {
+                "aarch64-apple-darwin", "x86_64-apple-darwin",
+            })
+
+    def test_check_inputs_rejects_invalid_versioned_manifest_contracts(self):
+        def rewrite_linkage(fixture, edit):
+            manifest = self.read_json(fixture["linkage_path"])
+            edit(manifest)
+            self.write_json(fixture["linkage_path"], manifest)
+
+        def bad_linkage_schema(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest.update(schema_version=2))
+
+        def bad_source_schema(fixture):
+            source = self.read_json(fixture["source_path"])
+            source["schema_version"] = 2
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def bad_source_boolean_schema(fixture):
+            source = self.read_json(fixture["source_path"])
+            source["schema_version"] = True
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def bad_linkage_boolean_schema(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest.update(schema_version=True))
+
+        def wrong_source_pin(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256="0" * 64))
+
+        def wrong_recipe_pin(fixture):
+            source = self.read_json(fixture["source_path"])
+            source["recipe_sha256"] = "0" * 64
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def missing_target(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"]["libraries"].pop("x86_64-apple-darwin"))
+
+        def latest_run(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"]["download"].update(run="latest"))
+
+        def missing_artifact_id(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"]["download"].update(artifact=0))
+
+        def missing_supplement_inventory(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"].pop("supplement"))
+
+        def invalid_supplement_inventory(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"].update(supplement=None))
+
+        def unsafe_supplement_path(fixture):
+            rewrite_linkage(fixture, lambda manifest: manifest["darwin"].update(supplement={"../escape": "a" * 64}))
+
+        cases = (
+            ("linkage schema", bad_linkage_schema),
+            ("boolean linkage schema", bad_linkage_boolean_schema),
+            ("source schema", bad_source_schema),
+            ("boolean source schema", bad_source_boolean_schema),
+            ("source manifest pin", wrong_source_pin),
+            ("source recipe pin", wrong_recipe_pin),
+            ("both Apple targets", missing_target),
+            ("run locator", latest_run),
+            ("artifact locator", missing_artifact_id),
+            ("missing supplement inventory", missing_supplement_inventory),
+            ("invalid supplement inventory", invalid_supplement_inventory),
+            ("unsafe supplement path", unsafe_supplement_path),
+        )
+        for label, mutate in cases:
+            with self.subTest(contract=label), tempfile.TemporaryDirectory(prefix="zmux-invalid-linkage-") as temporary:
+                fixture = self.make_versioned_fixture(Path(temporary))
+                mutate(fixture)
+                with self.assertRaises(Rejected):
+                    self.check_versioned_fixture(fixture)
+
+    def test_versioned_download_identity_keeps_exact_observed_api_pins(self):
+        with tempfile.TemporaryDirectory(prefix="zmux-versioned-linkage-") as temporary:
+            fixture = self.make_versioned_fixture(Path(temporary))
+            accepted, _ = self.check_versioned_fixture(fixture)
+            pin = accepted["download"]
+            valid = {
+                "id": pin["artifact"],
+                "name": pin["name"],
+                "expired": False,
+                "size_in_bytes": pin["archive_bytes"],
+                "digest": "sha256:" + pin["archive_sha256"],
+                "workflow_run": {"id": pin["run"], "head_sha": accepted["source_sha"]},
+            }
+            linkage.verify_download_identity(valid, accepted)
+            changed = (
+                ("artifact id", "id", 1),
+                ("artifact name", "name", "latest"),
+                ("expiry", "expired", True),
+                ("archive size", "size_in_bytes", pin["archive_bytes"] + 1),
+                ("archive digest", "digest", "sha256:" + "0" * 64),
+                ("run id", "workflow_run", {"id": pin["run"] + 1, "head_sha": accepted["source_sha"]}),
+                ("source SHA", "workflow_run", {"id": pin["run"], "head_sha": "0" * 40}),
+            )
+            for label, key, value in changed:
+                with self.subTest(identity=label), self.assertRaises(Rejected):
+                    metadata = copy.deepcopy(valid)
+                    metadata[key] = value
+                    linkage.verify_download_identity(metadata, accepted)
+
+    def test_versioned_source_hashes_include_the_exact_linked_program_status_case(self):
+        hashes = linkage.source_hashes(candidate_set=VERSIONED_7501)
+        path = "crates/terminal-adapter/tests/program_status.rs"
+        self.assertIn(path, hashes)
+        self.assertEqual(hashes[path], digest((Path(__file__).resolve().parents[2] / path).read_bytes()))
+        # The shared owner defines the semantics exercised by the linked tests;
+        # its implementation and dependency contract must be retained as inputs.
+        for shared in ("crates/program-status/src/lib.rs", "crates/program-status/Cargo.toml"):
+            self.assertTrue(shared in hashes, f"shared protocol input missing: {shared}")
+            self.assertEqual(hashes[shared], digest((Path(__file__).resolve().parents[2] / shared).read_bytes()))
+
+        session_path = Path(__file__).resolve().parents[2] / "crates/session-runtime/tests/program_status.rs"
+        session_hashes = linkage.source_hashes(
+            include_session_runtime=True, candidate_set=VERSIONED_7501)
+        if session_path.is_file():
+            relative = "crates/session-runtime/tests/program_status.rs"
+            self.assertIn(relative, session_hashes)
+            self.assertEqual(session_hashes[relative], digest(session_path.read_bytes()))
+
+    def test_program_status_lane_requires_the_exact_single_linked_test(self):
+        passing = (
+            "running 1 test\n"
+            "test linked_engine_stages_raw_reports_query_prompt_ris_child_exit_and_close ... ok\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.02s\n"
+        )
+        linkage.require_program_status_test(passing)
+        for output in (
+            passing.replace("1 passed; 0 failed", "0 passed; 1 failed"),
+            passing.replace("linked_engine_stages_raw_reports_query_prompt_ris_child_exit_and_close", "another_test"),
+            passing.replace("1 passed; 0 failed", "7 passed; 0 failed"),
+        ):
+            with self.subTest(output=output), self.assertRaisesRegex(Rejected, "exactly once"):
+                linkage.require_program_status_test(output)
+
+        session_passing = (
+            "running 1 test\n"
+            "test linked_real_pty_orders_query_before_da_and_retires_only_after_final_drain ... ok\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.02s\n"
+        )
+        linkage.require_session_program_status_test(session_passing)
+        with self.assertRaisesRegex(Rejected, "exactly once"):
+            linkage.require_session_program_status_test(
+                session_passing.replace("1 passed; 0 failed", "0 passed; 1 failed"))
+
+    def test_check_inputs_keeps_historical_run_and_artifact_ids_pinned(self):
+        for locator in ("run", "artifact"):
+            with self.subTest(locator=locator), tempfile.TemporaryDirectory(prefix="zmux-historical-linkage-") as temporary:
+                historical = linkage.document(HERE / "linkage-candidates.json")
+                historical["darwin"]["download"][locator] += 1
+                manifest_path = Path(temporary) / "linkage-candidates.json"
+                self.write_json(manifest_path, historical)
+                with patch.dict(candidate_sets.LINKAGE_MANIFESTS, {HISTORICAL: manifest_path}):
+                    with self.assertRaisesRegex(Rejected, "unsupported retained download identity"):
+                        linkage.check_inputs(HISTORICAL)
+
     def test_exact_download_identity_refuses_changed_or_expired_inputs(self):
         accepted, _ = linkage.check_inputs()
         pin = accepted["download"]
@@ -92,6 +375,17 @@ class RetainedLinkageChecks(unittest.TestCase):
                         {"reason": "build-script-executed", "package_id": "bridge-id", "out_dir": str(owner)}]
             encode = lambda records: "\n".join(json.dumps(record) for record in records)
             self.assertEqual(linkage.cargo_outputs(encode(messages), "adapter-id", "bridge-id", root), (executable, owner))
+            status_messages = copy.deepcopy(messages)
+            status_messages[0]["target"]["name"] = "program_status"
+            self.assertEqual(
+                linkage.cargo_outputs(encode(status_messages), "adapter-id", "bridge-id", root, "program_status"),
+                (executable, owner),
+            )
+            self.assertEqual(
+                linkage.cargo_test_executable(
+                    encode(status_messages[:1]), "adapter-id", root, "program_status"),
+                executable,
+            )
             session_messages = copy.deepcopy(messages)
             session_messages[0]["package_id"] = "session-id"
             session_messages[0]["target"]["name"] = "engine"

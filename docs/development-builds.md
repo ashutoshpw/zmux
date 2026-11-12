@@ -46,6 +46,11 @@ Release signing, notarization and automatic updates are later distribution gates
 - Browser cloud sign-in with PKCE, Keychain credentials and account/device management.
 - A serialized command path and revisioned snapshots; native UI does not parse PTY output.
 
+The OSC 7501 Programs integration is still in progress and is not established by the
+older verified build receipt below. Optional Ghostty support requires a new versioned
+7501 source candidate and fresh accepted libraries; historical Ghostty roots and
+receipts are not proof of the 7501 UI. See the [program status guide](program-status.md).
+
 Use **⌘N** for a workspace, **⌘T** for a terminal tab, **⌘D** to split right, **⇧⌘D** to
 split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the last closed item.
 Use **Ctrl+Tab** / **Ctrl+Shift+Tab** for the next/previous tab in the focused pane, wrapping

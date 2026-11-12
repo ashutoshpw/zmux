@@ -148,6 +148,23 @@ struct NotificationTarget: Codable, Sendable, Equatable {
     }
 }
 
+enum ProgramNotificationSoundKind: String, Codable, Sendable, Equatable {
+    case needsUser = "needs_user"
+    case completed
+
+    var agentAlertSoundKind: AgentAlertKind {
+        switch self {
+        case .needsUser: .needsUser
+        case .completed: .completed
+        }
+    }
+}
+
+enum NativeNotificationSoundSource: String, Codable, Sendable, Equatable {
+    case agentLifecycle = "agent_lifecycle"
+    case osc7501
+}
+
 struct NativeNotificationRequest: Codable, Sendable, Equatable {
     let identifier: String
     let target: NotificationTarget
@@ -158,6 +175,32 @@ struct NativeNotificationRequest: Codable, Sendable, Equatable {
     let replyEnabled: Bool
     /// Tagged lifecycle banners are silent at the OS layer; recognized events use NSSound.
     let agentAlertKind: String?
+    /// OSC-origin sounds are source-tagged separately from provider lifecycle alerts.
+    let alertSoundSource: NativeNotificationSoundSource?
+    let alertSoundKind: ProgramNotificationSoundKind?
+
+    var suppressesSystemSound: Bool {
+        agentAlertKind != nil || alertSoundSource != nil
+    }
+
+    var localSoundKind: AgentAlertKind? {
+        if let alertSoundKind { return alertSoundKind.agentAlertSoundKind }
+        if let agentAlertKind { return AgentAlertKind(rawValue: agentAlertKind) }
+        return nil
+    }
+
+    var soundRoutingIsValid: Bool {
+        if let alertSoundSource {
+            guard let alertSoundKind else { return false }
+            switch alertSoundSource {
+            case .agentLifecycle:
+                return agentAlertKind == alertSoundKind.rawValue
+            case .osc7501:
+                return agentAlertKind == nil
+            }
+        }
+        return alertSoundKind == nil
+    }
 }
 
 struct NativeNotificationSnapshot: Codable, Sendable {
@@ -280,6 +323,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     private let reportError: @MainActor (String) -> Void
     private let agentAlertAudio: AgentAlertAudioPlayer
     private var agentAlertEventGate = AgentAlertEventGate()
+    private var programAlertEventGate = ProgramAlertEventGate()
     private var epoch: UUID?
     private var authorizationGeneration: UInt64 = 0
     private var permissionObservations = PermissionObservations()
@@ -341,6 +385,32 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         return agentAlertEventGate.lastUpdateAccepted
     }
 
+    /// Delivers only Rust-admitted OSC events that still belong to the current
+    /// terminal session and command epoch. Program status remains visible even
+    /// when local sounds are muted or unavailable.
+    func updateProgramAlerts(_ snapshot: ProgramStatusAlertSnapshot?,
+                            current terminals: [ProgramStatusTerminal]?,
+                            mode: ProgramAlertSnapshotMode = .live) -> Bool {
+        guard !stopped else { return false }
+        guard let snapshot, let terminals else {
+            programAlertEventGate.reset()
+            return false
+        }
+
+        let update = programAlertEventGate.update(snapshot, current: terminals, mode: mode)
+        if update.gapDetected {
+            reportError("OSC 7501 alert history had a gap; retained events were used only to establish a fresh baseline.")
+        } else if !update.accepted {
+            reportError("OSC 7501 alert snapshot was stale or malformed; audio delivery is paused until a valid snapshot arrives.")
+        }
+        for event in update.events {
+            if case .unavailable(let reason) = agentAlertAudio.playEvent(event.kind.localSoundKind) {
+                reportError("OSC 7501 alert audio unavailable: \(reason). Program status remains visible in the sidebar.")
+            }
+        }
+        return update.accepted
+    }
+
     func previewAgentAlertSound(_ kind: AgentAlertKind) -> AgentAlertPlaybackResult {
         agentAlertAudio.preview(kind)
     }
@@ -366,6 +436,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             guard request.target.epoch == snapshot.epoch,
                   request.identifier == Self.identifier(request.target),
                   !request.replyEnabled || Self.isTerminal(request.target),
+                  request.soundRoutingIsValid,
                   next.updateValue(request, forKey: request.identifier) == nil else {
                 reportError("Invalid native notification snapshot; delivery is paused")
                 remove(Array(desired.keys)); desired.removeAll()
@@ -472,6 +543,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         stopped = true
         remove(Array(Set(desired.keys).union(pending.keys)))
         desired.removeAll(); attempted.removeAll(); replyAttempts.removeAll(); events.removeAll()
+        programAlertEventGate.reset()
         for identifier in pending.keys { pending[identifier]?.timer?.cancel() }
         eventTask?.cancel(); eventTask = nil
         center.delegate = nil
@@ -505,7 +577,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             let content = UNMutableNotificationContent()
             content.title = String(request.title.prefix(128)); content.subtitle = String(request.subtitle.prefix(128))
             content.body = String(request.body.prefix(2048))
-            content.sound = request.agentAlertKind == nil ? .default : nil
+            content.sound = request.suppressesSystemSound ? nil : .default
             content.categoryIdentifier = request.replyEnabled ? "zmux.inbox.reply" : "zmux.inbox"
             pending[request.identifier] = Pending(request: request)
             pending[request.identifier]?.timer = Task { [weak self] in
@@ -589,7 +661,10 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         guard let request = desired[identifier], current(request), pending[identifier]?.expired != true else {
             remove([identifier]); return []
         }
-        return request.agentAlertKind == nil ? [.banner, .list, .sound] : [.banner, .list]
+        return Self.presentationOptions(for: request)
+    }
+    static func presentationOptions(for request: NativeNotificationRequest) -> UNNotificationPresentationOptions {
+        request.suppressesSystemSound ? [.banner, .list] : [.banner, .list, .sound]
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let identifier = response.notification.request.identifier

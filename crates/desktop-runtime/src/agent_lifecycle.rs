@@ -96,7 +96,7 @@ pub enum Connection {
 }
 
 /// The stable desktop owner and current local session to which a provider hook is bound.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
     pub identity_namespace: Uuid,
@@ -241,6 +241,33 @@ pub enum Action {
         runtime_id: Uuid,
         generation: Uuid,
         sequence: u64,
+    },
+    /// A local provider wrapper registers a pending route before starting the
+    /// child process. It carries no provider session identity or capabilities.
+    ProviderRouteStarted {
+        target: Target,
+        provider: Provider,
+        route_id: Uuid,
+        runtime_id: Uuid,
+        generation: Uuid,
+    },
+    /// Retire only the exact route admitted by a matching wrapper generation.
+    ProviderRouteEnded {
+        target: Target,
+        provider: Provider,
+        route_id: Uuid,
+        runtime_id: Uuid,
+        generation: Uuid,
+    },
+    /// Roll back a pending route when admission or process spawn fails before
+    /// the provider child ever starts. Unlike Ended, cancellation releases the
+    /// command-epoch source reservation immediately.
+    ProviderRouteCancelled {
+        target: Target,
+        provider: Provider,
+        route_id: Uuid,
+        runtime_id: Uuid,
+        generation: Uuid,
     },
 }
 
@@ -768,6 +795,22 @@ impl Runtime {
                 })
             })
             .collect()
+    }
+
+    /// Remove one just-admitted event whose terminal-local source policy chose
+    /// OSC 7501. Its cursor remains consumed and is reported as a journal gap so
+    /// native consumers reconcile without playing the suppressed provider sound.
+    pub fn suppress_alert_event(&mut self, cursor: u64) -> bool {
+        let Some(index) = self
+            .alert_events
+            .iter()
+            .position(|event| event.cursor == cursor)
+        else {
+            return false;
+        };
+        self.alert_events.remove(index);
+        self.alert_dropped_through_cursor = self.alert_dropped_through_cursor.max(cursor);
+        true
     }
 
     /// A heartbeat only proves that the managed SSH lifecycle channel is
@@ -1881,7 +1924,10 @@ impl Runtime {
             }
             Action::ProviderObservation { .. }
             | Action::ProviderEvidenceLost { .. }
-            | Action::ProviderSessionEnded { .. } => Err(
+            | Action::ProviderSessionEnded { .. }
+            | Action::ProviderRouteStarted { .. }
+            | Action::ProviderRouteEnded { .. }
+            | Action::ProviderRouteCancelled { .. } => Err(
                 "provider actions require exact local admission through the desktop owner".into(),
             ),
         }
@@ -2209,6 +2255,10 @@ pub fn has_remote_owner(model: &Model, target: Target) -> bool {
 
 pub fn has_local_provider_owner(model: &Model, target: Target, provider: Provider) -> bool {
     !provider.is_remote() && provider.is_normalized() && owner(model, target, provider).is_some()
+}
+
+pub fn has_provider_owner(model: &Model, target: Target, provider: Provider) -> bool {
+    owner(model, target, provider).is_some()
 }
 
 #[cfg(test)]

@@ -31,6 +31,9 @@ RPC_TIMEOUT = 2.0
 SNAPSHOT_SECONDS = 5.0
 HOOK_WAIT_WARNING = 4.0
 OPAQUE_ID_MAX = 256
+LIFECYCLE_VERSION = 4
+PROVIDER_ROUTE_RECEIPT_TIMEOUT = 2.0
+MAX_PROVIDER_ROUTE_RECEIPT_BYTES = 512
 
 
 def valid_id(value):
@@ -57,6 +60,179 @@ def root_context():
     ):
         raise ValueError("managed shell integration directory is unsafe")
     return nonce, root
+
+
+def provider_route_receipt_path(root, route_id):
+    try:
+        parsed = uuid.UUID(route_id)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("provider route ID is invalid")
+    if parsed.int == 0:
+        raise ValueError("provider route ID is nil")
+    return os.path.join(root, "p-" + parsed.hex)
+
+
+def write_lifecycle_fifo(root, value):
+    path = os.path.join(root, "agent-events")
+    descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISFIFO(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or len(value) > os.fpathconf(descriptor, "PC_PIPE_BUF")
+            or os.write(descriptor, value) != len(value)
+        ):
+            raise OSError("provider lifecycle FIFO write failed")
+    finally:
+        os.close(descriptor)
+
+
+def emit_provider_route(root, provider, route_id, provider_generation, phase, expected_generation=None):
+    if provider not in ("codex", "opencode") or phase not in ("starting", "ended", "cancelled"):
+        raise ValueError("provider route event is invalid")
+    route_hex = uuid.UUID(route_id).hex
+    provider_generation_hex = uuid.UUID(provider_generation).hex
+    if not route_hex.strip("0") or not provider_generation_hex.strip("0"):
+        raise ValueError("provider route identity is nil")
+    nonce, _ = root_context()
+    try:
+        generation = generation_value(root, wait_seconds=0.0)
+    except FileNotFoundError:
+        return None
+    if expected_generation is not None and generation != expected_generation:
+        return None
+    frame = {
+        "nonce": nonce,
+        "generation": generation,
+        "provider_route": {
+            "provider": provider,
+            "route_id": str(uuid.UUID(hex=route_hex)),
+            "provider_generation": str(uuid.UUID(hex=provider_generation_hex)),
+            "phase": phase,
+        },
+    }
+    value = json.dumps(frame, separators=(",", ":"), ensure_ascii=True).encode("ascii") + b"\n"
+    if len(value) > MAX_EVENT_BYTES:
+        raise ValueError("provider route event exceeded its byte bound")
+    write_lifecycle_fifo(root, value)
+    return generation
+
+
+def _owned_route_socket(path, identity=None):
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return None
+    if (
+        not stat.S_ISSOCK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+        or (identity is not None and (metadata.st_dev, metadata.st_ino) != identity)
+    ):
+        return None
+    return metadata
+
+
+def _remove_owned_route_socket(path, identity):
+    metadata = _owned_route_socket(path, identity)
+    if metadata is None:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def begin_provider_route(root, provider):
+    """Wait for exact Desktop admission before starting a managed provider."""
+    route_id = str(uuid.uuid4())
+    provider_generation = str(uuid.uuid4())
+    path = provider_route_receipt_path(root, route_id)
+    endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    identity = None
+    start_sent = False
+    nonce, _ = root_context()
+    try:
+        endpoint.bind(path)
+        os.chmod(path, 0o600)
+        metadata = _owned_route_socket(path)
+        if metadata is None:
+            raise OSError("unsafe provider route receipt socket")
+        identity = (metadata.st_dev, metadata.st_ino)
+        generation = emit_provider_route(
+            root, provider, route_id, provider_generation, "starting"
+        )
+        if generation is None:
+            return None
+        start_sent = True
+        deadline = time.monotonic() + PROVIDER_ROUTE_RECEIPT_TIMEOUT
+        while time.monotonic() < deadline:
+            readable, _, _ = select.select([endpoint], [], [], deadline - time.monotonic())
+            if not readable:
+                break
+            payload = endpoint.recv(MAX_PROVIDER_ROUTE_RECEIPT_BYTES + 1)
+            if len(payload) > MAX_PROVIDER_ROUTE_RECEIPT_BYTES:
+                continue
+            try:
+                receipt = json.loads(payload)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if (
+                not isinstance(receipt, dict)
+                or set(receipt) != {"kind", "version", "nonce", "generation", "route_id", "accepted"}
+                or receipt.get("kind") != "provider_route_receipt"
+                or receipt.get("version") != LIFECYCLE_VERSION
+                or uuid.UUID(receipt.get("nonce")).hex != nonce
+                or uuid.UUID(receipt.get("generation")).hex != uuid.UUID(generation).hex
+                or uuid.UUID(receipt.get("route_id")).hex != uuid.UUID(route_id).hex
+                or type(receipt.get("accepted")) is not bool
+            ):
+                continue
+            if receipt["accepted"]:
+                return (route_id, provider_generation, generation)
+            emit_provider_route(
+                root,
+                provider,
+                route_id,
+                provider_generation,
+                "cancelled",
+                expected_generation=generation,
+            )
+            start_sent = False
+            return None
+        if start_sent:
+            emit_provider_route(
+                root,
+                provider,
+                route_id,
+                provider_generation,
+                "cancelled",
+                expected_generation=generation,
+            )
+            start_sent = False
+        return None
+    except (OSError, ValueError, TypeError, AttributeError):
+        if start_sent:
+            try:
+                emit_provider_route(
+                    root,
+                    provider,
+                    route_id,
+                    provider_generation,
+                    "cancelled",
+                    expected_generation=locals().get("generation"),
+                )
+            except Exception:
+                pass
+        return None
+    finally:
+        endpoint.close()
+        if identity is not None:
+            _remove_owned_route_socket(path, identity)
 
 
 def generation_value(root, wait_seconds=5.0):
@@ -822,6 +998,7 @@ def run_codex(args, root):
     server = None
     listener_thread = None
     spawned = False
+    route = None
     try:
         listener.bind(socket_path)
         os.chmod(socket_path, 0o600)
@@ -857,6 +1034,11 @@ def run_codex(args, root):
         provider_args = ["--config", setting, *args]
         environment = os.environ.copy()
         environment["ZMUX_PROVIDER_EVENT_SOCKET"] = socket_path
+        route = begin_provider_route(root, "codex")
+        if route is None:
+            return codex_untracked(
+                executable, args, "Desktop provider-route admission was not confirmed"
+            )
         provider = subprocess.Popen([executable, *provider_args], env=environment)
         spawned = True
         watcher = None
@@ -891,8 +1073,23 @@ def run_codex(args, root):
             write_loss(root)
             print(f"zmux: Codex lifecycle evidence was lost ({error}); activity remains Unknown", file=sys.stderr)
             return provider.wait() if provider is not None else 1
+        if route is not None:
+            try:
+                emit_provider_route(
+                    root, "codex", route[0], route[1], "cancelled", expected_generation=route[2]
+                )
+            except Exception:
+                write_loss(root)
+            route = None
         return codex_untracked(executable, args, "read-only app-server/config preflight failed")
     finally:
+        if route is not None:
+            try:
+                emit_provider_route(
+                    root, "codex", route[0], route[1], "ended", expected_generation=route[2]
+                )
+            except Exception:
+                write_loss(root)
         stop.set()
         listener.close()
         if listener_thread is not None:
@@ -950,6 +1147,8 @@ def run_opencode(args, root):
         expected_session = expected_opencode_session(args)
     except ValueError:
         return opencode_untracked(executable, args, "the explicit OpenCode session ID is ambiguous")
+    route = None
+    admission_attempted = False
     try:
         help_result = bounded_command_output([executable, "--help"], 65536, timeout=2.0)
         if not advertises_option(help_result, "--standalone"):
@@ -979,6 +1178,10 @@ def run_opencode(args, root):
         environment["ZMUX_PROVIDER_LOSS_FIFO"] = os.path.join(root, "agent-events-loss")
         if expected_session is not None:
             environment["ZMUX_OPENCODE_EXPECTED_SESSION_ID"] = expected_session
+        admission_attempted = True
+        route = begin_provider_route(root, "opencode")
+        if route is None:
+            raise ValueError("Desktop provider-route admission was not confirmed")
         provider = subprocess.Popen([executable, *provider_args], env=environment)
     except Exception as error:
         if "provider" in locals():
@@ -986,13 +1189,30 @@ def run_opencode(args, root):
             write_loss(root)
             print(f"zmux: OpenCode lifecycle setup failed after launch ({error}); activity remains Unknown", file=sys.stderr)
             return provider.wait()
+        if route is not None:
+            try:
+                emit_provider_route(
+                    root,
+                    "opencode",
+                    route[0],
+                    route[1],
+                    "cancelled",
+                    expected_generation=route[2],
+                )
+            except Exception:
+                write_loss(root)
         config = locals().get("config_dir")
         if config is not None:
             try:
                 shutil.rmtree(config)
             except OSError:
                 pass
-        return opencode_untracked(executable, args, "invocation-scoped plugin setup failed")
+        reason = (
+            "Desktop provider-route admission was not confirmed"
+            if admission_attempted
+            else "invocation-scoped plugin setup failed"
+        )
+        return opencode_untracked(executable, args, reason)
     try:
         warned_at = time.monotonic() + HOOK_WAIT_WARNING * 2
         while provider.poll() is None:
@@ -1005,6 +1225,18 @@ def run_opencode(args, root):
             time.sleep(0.05)
         return provider.returncode if provider.returncode is not None else 1
     finally:
+        if route is not None:
+            try:
+                emit_provider_route(
+                    root,
+                    "opencode",
+                    route[0],
+                    route[1],
+                    "ended",
+                    expected_generation=route[2],
+                )
+            except Exception:
+                write_loss(root)
         try:
             shutil.rmtree(config_dir)
         except FileNotFoundError:

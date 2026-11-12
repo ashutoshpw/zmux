@@ -14,12 +14,15 @@ import sys
 import time
 import uuid
 
-VERSION = 3
+VERSION = 4
 MAX_LINE_BYTES = 4096
 HEARTBEAT_SECONDS = 5.0
 FIFO_WAIT_SECONDS = 20.0
 RECEIPT_WAIT_SECONDS = 1.8
 MAX_PENDING_RECEIPTS = 64
+PROVIDER_ROUTE_RECEIPT_SECONDS = 3.0
+MAX_PENDING_PROVIDER_ROUTE_RECEIPTS = 64
+MAX_ACTIVE_PROVIDER_ROUTES = 64
 MAX_SEEN_EVENT_IDS = 256
 MAX_PROVIDER_ID_BYTES = 256
 
@@ -172,6 +175,13 @@ def receipt_path(root, event_id):
     return os.path.join(root, "r-" + event_hex)
 
 
+def provider_route_receipt_path(root, route_id):
+    route_hex = uuid_hex(route_id)
+    if route_hex is None:
+        return None
+    return os.path.join(root, "p-" + route_hex)
+
+
 def send_hook_receipt(root, path, event_id, nonce, generation, disposition):
     metadata = os.stat(path, follow_symlinks=False)
     if (
@@ -201,6 +211,21 @@ def send_hook_receipt(root, path, event_id, nonce, generation, disposition):
 
 
 def receipt_endpoint_available(path):
+    if path is None:
+        return False
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        stat.S_ISSOCK(metadata.st_mode)
+        and metadata.st_uid == os.geteuid()
+        and stat.S_IMODE(metadata.st_mode) == 0o600
+        and metadata.st_nlink == 1
+    )
+
+
+def provider_route_endpoint_available(path):
     if path is None:
         return False
     try:
@@ -258,7 +283,62 @@ def valid_receipt(frame, nonce, generation, pending, root):
     pending.pop(event_hex, None)
 
 
-def process_input_bytes(data, nonce, generation, pending, root, input_pending):
+def valid_provider_route_receipt(frame, nonce, generation, pending_routes, root):
+    if not isinstance(frame, dict) or set(frame) != {
+        "kind",
+        "version",
+        "nonce",
+        "generation",
+        "route_id",
+        "accepted",
+    }:
+        return
+    route_hex = uuid_hex(frame.get("route_id"))
+    if (
+        frame.get("kind") != "provider_route_receipt"
+        or frame.get("version") != VERSION
+        or uuid_hex(frame.get("nonce")) != nonce
+        or uuid_hex(frame.get("generation")) != generation
+        or route_hex is None
+        or type(frame.get("accepted")) is not bool
+    ):
+        return
+    entry = pending_routes.get(route_hex)
+    if entry is None:
+        return
+    provider_generation, deadline = entry
+    if time.monotonic() >= deadline:
+        pending_routes.pop(route_hex, None)
+        return
+    path = provider_route_receipt_path(root, route_hex)
+    if not provider_route_endpoint_available(path):
+        pending_routes.pop(route_hex, None)
+        return
+    payload = json.dumps(
+        {
+            "kind": "provider_route_receipt",
+            "version": VERSION,
+            "nonce": str(uuid.UUID(hex=nonce)),
+            "generation": str(uuid.UUID(hex=generation)),
+            "route_id": str(uuid.UUID(hex=route_hex)),
+            "accepted": frame["accepted"],
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+    if len(payload) > 512:
+        pending_routes.pop(route_hex, None)
+        return
+    endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        endpoint.sendto(payload, path)
+    except OSError:
+        return
+    finally:
+        endpoint.close()
+    pending_routes.pop(route_hex, None)
+
+
+def process_input_bytes(data, nonce, generation, pending, pending_routes, root, input_pending):
     if not data:
         return
     input_pending.extend(data)
@@ -276,6 +356,7 @@ def process_input_bytes(data, nonce, generation, pending, root, input_pending):
         except (ValueError, UnicodeDecodeError):
             continue
         valid_receipt(frame, nonce, generation, pending, root)
+        valid_provider_route_receipt(frame, nonce, generation, pending_routes, root)
 
 
 def cleanup_pending(pending):
@@ -283,6 +364,13 @@ def cleanup_pending(pending):
     for event_hex, (_, deadline) in list(pending.items()):
         if deadline <= now:
             pending.pop(event_hex, None)
+
+
+def cleanup_pending_provider_routes(pending_routes):
+    now = time.monotonic()
+    for route_hex, (_, deadline) in list(pending_routes.items()):
+        if deadline <= now:
+            pending_routes.pop(route_hex, None)
 
 
 def remember_event_id(seen, event_hex):
@@ -423,6 +511,8 @@ def main():
         return 74
     active_descriptor, generation = activation
     pending = {}
+    pending_routes = {}
+    active_routes = {}
     seen_event_ids = OrderedDict()
     input_pending = bytearray()
     fifo_pending = bytearray()
@@ -431,6 +521,7 @@ def main():
     try:
         while os.path.exists(fifo):
             cleanup_pending(pending)
+            cleanup_pending_provider_routes(pending_routes)
             timeout = max(0.0, min(0.1, next_heartbeat - time.monotonic()))
             readable, _, _ = select.select(
                 [reader, loss_reader, sys.stdin.buffer], [], [], timeout
@@ -440,7 +531,7 @@ def main():
                 if not incoming:
                     return 0
                 process_input_bytes(
-                    incoming, nonce, generation, pending, root, input_pending
+                    incoming, nonce, generation, pending, pending_routes, root, input_pending
                 )
             if loss_reader in readable and os.read(loss_reader, 4096):
                 sequence += 1
@@ -475,11 +566,10 @@ def main():
                             return 73
                         if supplied.get("nonce") != nonce:
                             continue
-                        # Protocol v3 Claude hooks predate the provider-state
-                        # extension and do not carry a stream generation. Keep
-                        # that existing envelope valid; provider observations
-                        # always require their explicit generation fence.
-                        if "provider_observation" in supplied or "generation" in supplied:
+                        # Legacy Claude hook envelopes carry only the session
+                        # nonce. Provider state and route frames also carry the
+                        # exact active stream generation.
+                        if "provider_observation" in supplied or "provider_route" in supplied or "generation" in supplied:
                             supplied_generation = uuid_hex(supplied.get("generation"))
                             if supplied_generation is None:
                                 sequence += 1
@@ -501,6 +591,71 @@ def main():
                                     "generation": str(uuid.UUID(hex=generation)),
                                     "sequence": sequence,
                                     "observation": supplied["provider_observation"],
+                                }
+                            )
+                            continue
+                        if "provider_route" in supplied:
+                            route = supplied["provider_route"]
+                            if (
+                                set(supplied) != {"nonce", "generation", "provider_route"}
+                                or not isinstance(route, dict)
+                                or set(route)
+                                != {"provider", "route_id", "provider_generation", "phase"}
+                                or route.get("provider") not in ("codex", "opencode")
+                                or route.get("phase") not in ("starting", "ended", "cancelled")
+                            ):
+                                sequence += 1
+                                send_gap(nonce, generation, sequence)
+                                return 73
+                            route_hex = uuid_hex(route.get("route_id"))
+                            provider_generation_hex = uuid_hex(route.get("provider_generation"))
+                            if route_hex is None or provider_generation_hex is None:
+                                sequence += 1
+                                send_gap(nonce, generation, sequence)
+                                return 73
+                            route_path = provider_route_receipt_path(root, route_hex)
+                            if route["phase"] == "starting":
+                                if (
+                                    route_hex in active_routes
+                                    or route_hex in pending_routes
+                                    or len(active_routes) >= MAX_ACTIVE_PROVIDER_ROUTES
+                                    or len(pending_routes) >= MAX_PENDING_PROVIDER_ROUTE_RECEIPTS
+                                    or not provider_route_endpoint_available(route_path)
+                                ):
+                                    sequence += 1
+                                    send_gap(nonce, generation, sequence)
+                                    continue
+                                active_routes[route_hex] = (
+                                    route["provider"], provider_generation_hex
+                                )
+                                pending_routes[route_hex] = (
+                                    provider_generation_hex,
+                                    time.monotonic() + PROVIDER_ROUTE_RECEIPT_SECONDS,
+                                )
+                            else:
+                                expected_route = active_routes.get(route_hex)
+                                if expected_route != (
+                                    route["provider"], provider_generation_hex
+                                ):
+                                    sequence += 1
+                                    send_gap(nonce, generation, sequence)
+                                    continue
+                                active_routes.pop(route_hex, None)
+                                pending_routes.pop(route_hex, None)
+                            sequence += 1
+                            send(
+                                {
+                                    "kind": "provider_route",
+                                    "version": VERSION,
+                                    "nonce": nonce,
+                                    "generation": str(uuid.UUID(hex=generation)),
+                                    "sequence": sequence,
+                                    "provider": route["provider"],
+                                    "route_id": str(uuid.UUID(hex=route_hex)),
+                                    "provider_generation": str(
+                                        uuid.UUID(hex=provider_generation_hex)
+                                    ),
+                                    "phase": route["phase"],
                                 }
                             )
                             continue

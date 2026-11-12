@@ -64,6 +64,9 @@ pub enum ControlCommand {
     SelectAgentTarget {
         target: crate::agent_lifecycle::SelectionTarget,
     },
+    SelectProgramTarget {
+        target: crate::program_status::SelectionTarget,
+    },
     SurfaceOrder {
         request: crate::surface_order::OrderRequest,
     },
@@ -632,6 +635,12 @@ fn dispatch(
             admission,
             request.request_id,
             Command::SelectAgentTarget { target },
+        ),
+        ControlCommand::SelectProgramTarget { target } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::SelectProgramTarget { target },
         ),
         ControlCommand::AgentMessages {
             request: message_request,

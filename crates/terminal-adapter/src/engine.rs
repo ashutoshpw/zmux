@@ -1,8 +1,9 @@
 use crate::{
-    InvalidSize, ProgramOpenRequest, ProgramOpenRequestError, Size, Terminal, TerminalError,
-    Viewport,
+    InvalidSize, Pointer, ProgramOpenRequest, ProgramOpenRequestError, Size, Terminal,
+    TerminalError, Viewport, Wheel,
 };
 use thiserror::Error;
+use zmux_program_status::SessionEpoch;
 
 /// Explicit backend selection. Existing runtime callers continue using Terminal;
 /// this staged integration seam never changes the default backend implicitly.
@@ -70,6 +71,7 @@ pub struct Engine {
     backend: Backend,
     published: Viewport,
     candidate: Option<Viewport>,
+    staged_generation: Option<u64>,
     generation: u64,
     failed: bool,
 }
@@ -122,20 +124,35 @@ impl Engine {
         kind: EngineKind,
         expected_open_nonce: Option<[u8; 16]>,
     ) -> Result<Self, EngineError> {
+        Self::new_with_session_epoch(size, kind, expected_open_nonce, SessionEpoch(0))
+    }
+
+    /// Construct an engine whose program-status owner belongs to one worker epoch.
+    pub fn new_with_session_epoch(
+        size: Size,
+        kind: EngineKind,
+        expected_open_nonce: Option<[u8; 16]>,
+        session_epoch: SessionEpoch,
+    ) -> Result<Self, EngineError> {
         size.validate()?;
         let (backend, published, generation) = match kind {
             EngineKind::Vt100 => {
-                let terminal = Terminal::new_with_open_request_nonce(size, expected_open_nonce)?;
-                let published = terminal.viewport();
+                let terminal = Terminal::new_with_open_request_nonce_and_epoch(
+                    size,
+                    expected_open_nonce,
+                    session_epoch,
+                )?;
+                let published = terminal.try_viewport()?;
                 (Backend::Vt100(terminal), published, 0)
             }
             #[cfg(feature = "ghostty")]
             EngineKind::Ghostty(limits) => {
-                let mut terminal = zmux_ghostty_vt::Engine::new(
+                let mut terminal = zmux_ghostty_vt::Engine::new_with_session_epoch(
                     size.cols,
                     size.rows,
                     crate::MAX_SCROLLBACK_LINES,
                     limits,
+                    session_epoch,
                 )?;
                 let generation = terminal.stage_process(&[])?;
                 let published = ghostty_viewport(&terminal, generation)?;
@@ -150,6 +167,7 @@ impl Engine {
             backend,
             published,
             candidate: None,
+            staged_generation: None,
             generation,
             failed: false,
         })
@@ -158,7 +176,7 @@ impl Engine {
     fn ready(&self) -> Result<(), EngineError> {
         if self.failed {
             Err(EngineError::Failed)
-        } else if self.candidate.is_some() {
+        } else if self.staged_generation.is_some() {
             Err(EngineError::Pending)
         } else {
             Ok(())
@@ -167,6 +185,22 @@ impl Engine {
 
     pub fn viewport(&self) -> &Viewport {
         &self.published
+    }
+
+    /// Export the latest committed parser state at the session frame cadence.
+    /// Default vt100 PTY reads can commit without repeatedly copying every cell.
+    pub fn refresh_viewport(&mut self) -> Result<(), EngineError> {
+        self.ready()?;
+        match &self.backend {
+            Backend::Vt100(terminal) => {
+                let mut viewport = terminal.try_viewport()?;
+                viewport.viewport_generation = self.generation;
+                self.published = viewport;
+            }
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => {}
+        }
+        Ok(())
     }
 
     /// Drain one-shot events from the selected parser. Ghostty currently has no OSC metadata
@@ -197,6 +231,144 @@ impl Engine {
                 .map_err(EngineError::from),
         };
         self.finish(result)
+    }
+
+    /// Session workers commit output per bounded PTY read, then export one full
+    /// viewport at the existing frame cadence. Ghostty keeps its exact export
+    /// boundary because that owner requires a sealed render candidate.
+    pub fn stage_process_deferred(&mut self, bytes: &[u8]) -> Result<EngineBatch, EngineError> {
+        self.ready()?;
+        if bytes.len() > 4096 {
+            return Err(EngineError::Invalid);
+        }
+        #[cfg(feature = "ghostty")]
+        if let Backend::Ghostty(terminal) = &mut self.backend {
+            let result = terminal
+                .stage_process(bytes)
+                .map(|_| ())
+                .map_err(EngineError::from);
+            return self.finish(result);
+        }
+        let result = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.process(bytes).map_err(EngineError::from),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => unreachable!(),
+        };
+        self.finish_deferred(result)
+    }
+
+    pub fn stage_scroll_deferred(&mut self, lines: i32) -> Result<EngineBatch, EngineError> {
+        self.ready()?;
+        if !(-1000..=1000).contains(&lines) {
+            return Err(EngineError::Invalid);
+        }
+        #[cfg(feature = "ghostty")]
+        if let Backend::Ghostty(terminal) = &mut self.backend {
+            let result = terminal
+                .stage_scroll(lines)
+                .map(|_| ())
+                .map_err(EngineError::from);
+            return self.finish(result);
+        }
+        let result = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.scroll(lines).map_err(EngineError::from),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => unreachable!(),
+        };
+        self.finish_deferred(result)
+    }
+
+    pub fn pointer_deferred(
+        &mut self,
+        event: Pointer,
+    ) -> Result<(Vec<u8>, EngineBatch), EngineError> {
+        self.ready()?;
+        let bytes = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.pointer(event),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => return Err(EngineError::Invalid),
+        };
+        let batch = self.finish_deferred(Ok(()))?;
+        Ok((bytes, batch))
+    }
+
+    pub fn wheel_deferred(&mut self, event: Wheel) -> Result<(Vec<u8>, EngineBatch), EngineError> {
+        self.ready()?;
+        #[cfg(feature = "ghostty")]
+        if event.history && matches!(&self.backend, Backend::Ghostty(_)) {
+            let batch = self.stage_scroll(event.lines.clamp(-1000, 1000))?;
+            return Ok((Vec::new(), batch));
+        }
+        match &mut self.backend {
+            Backend::Vt100(terminal) => {
+                let bytes = terminal.wheel(event);
+                let batch = self.finish_deferred(Ok(()))?;
+                Ok((bytes, batch))
+            }
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => Err(EngineError::Invalid),
+        }
+    }
+
+    /// Stage the observed attached-child exit after its final PTY output drain.
+    /// Done/error records remain; working/blocked records retire in this batch.
+    pub fn stage_attached_child_exited(&mut self) -> Result<EngineBatch, EngineError> {
+        self.ready()?;
+        let result = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.attached_child_exited().map_err(EngineError::from),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(terminal) => terminal
+                .stage_process(&[])
+                .and_then(|_| terminal.attached_child_exited())
+                .map(|_| ())
+                .map_err(EngineError::from),
+        };
+        self.finish(result)
+    }
+
+    pub fn terminal_closed_viewport(&mut self) -> Result<Viewport, EngineError> {
+        let status = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal
+                .terminal_closed_status_snapshot()
+                .map_err(EngineError::from)?,
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(terminal) => terminal
+                .terminal_closed_status_snapshot()
+                .map_err(EngineError::from)?,
+        };
+        let mut viewport = self.published.clone();
+        viewport.program_status = status;
+        Ok(viewport)
+    }
+
+    pub fn pointer(&mut self, event: Pointer) -> Result<(Vec<u8>, EngineBatch), EngineError> {
+        self.ready()?;
+        let bytes = match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.pointer(event),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => return Err(EngineError::Invalid),
+        };
+        let batch = self.finish(Ok(()))?;
+        Ok((bytes, batch))
+    }
+
+    pub fn wheel(&mut self, event: Wheel) -> Result<(Vec<u8>, EngineBatch), EngineError> {
+        self.ready()?;
+        #[cfg(feature = "ghostty")]
+        if event.history && matches!(&self.backend, Backend::Ghostty(_)) {
+            let batch = self.stage_scroll(event.lines.clamp(-1000, 1000))?;
+            return Ok((Vec::new(), batch));
+        }
+        match &mut self.backend {
+            Backend::Vt100(terminal) => {
+                let bytes = terminal.wheel(event);
+                let batch = self.finish(Ok(()))?;
+                Ok((bytes, batch))
+            }
+            #[cfg(feature = "ghostty")]
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => Err(EngineError::Invalid),
+        }
     }
 
     /// Stage engine geometry first, then let the worker apply kernel PTY geometry.
@@ -241,10 +413,34 @@ impl Engine {
         result
     }
 
+    fn finish_deferred(
+        &mut self,
+        result: Result<(), EngineError>,
+    ) -> Result<EngineBatch, EngineError> {
+        let result = result.and_then(|()| match &mut self.backend {
+            Backend::Vt100(terminal) => {
+                let generation = self.generation.checked_add(1).ok_or(EngineError::Invalid)?;
+                let replies = terminal.take_replies()?;
+                self.candidate = None;
+                self.staged_generation = Some(generation);
+                Ok(EngineBatch {
+                    generation,
+                    replies,
+                })
+            }
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => Err(EngineError::Invalid),
+        });
+        if result.is_err() {
+            self.abort();
+        }
+        result
+    }
+
     fn export(&mut self) -> Result<EngineBatch, EngineError> {
         let generation = self.generation.checked_add(1).ok_or(EngineError::Invalid)?;
-        let (candidate, replies) = match &self.backend {
-            Backend::Vt100(terminal) => (terminal.viewport(), Vec::new()),
+        let (candidate, replies) = match &mut self.backend {
+            Backend::Vt100(terminal) => (terminal.try_viewport()?, terminal.take_replies()?),
             #[cfg(feature = "ghostty")]
             Backend::Ghostty(terminal) => {
                 let mut replies = Vec::new();
@@ -258,6 +454,7 @@ impl Engine {
         let mut candidate = candidate;
         candidate.viewport_generation = generation;
         self.candidate = Some(candidate);
+        self.staged_generation = Some(generation);
         Ok(EngineBatch {
             generation,
             replies,
@@ -266,7 +463,7 @@ impl Engine {
 
     pub fn commit(&mut self, generation: u64) -> Result<(), EngineError> {
         if self.failed
-            || self.candidate.is_none()
+            || self.staged_generation != Some(generation)
             || self.generation.checked_add(1) != Some(generation)
         {
             return Err(EngineError::Invalid);
@@ -279,8 +476,11 @@ impl Engine {
             return Err(error.into());
         }
         // Move only after the same exact nonallocating engine commit succeeds.
-        self.published = self.candidate.take().ok_or(EngineError::Invalid)?;
+        if let Some(candidate) = self.candidate.take() {
+            self.published = candidate;
+        }
         self.generation = generation;
+        self.staged_generation = None;
         Ok(())
     }
 
@@ -294,6 +494,7 @@ impl Engine {
                 terminal.abort();
             }
             self.candidate = None;
+            self.staged_generation = None;
             self.failed = true;
         }
     }
@@ -429,5 +630,6 @@ fn ghostty_viewport(
         scrollback_offset: (f.history_rows - f.scroll_offset) as usize,
         scrollback_lines: f.history_rows as usize,
         alternate_screen: f.alternate != 0,
+        program_status: engine.program_status_snapshot()?,
     })
 }

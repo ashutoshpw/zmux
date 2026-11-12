@@ -750,15 +750,15 @@ fn parse_pairs(args: &[u8]) -> Result<RawFields<'_>, RejectionReason> {
         let valid_value = value.iter().all(|byte| is_value_byte(*byte));
 
         if key == b"id" {
-            if value.len() > MAX_ID_BYTES {
-                return Err(RejectionReason::IdTooLong);
-            }
-            check_id_limits(value)?;
             if !valid_value {
                 // Revision 0.4 skips malformed pairs. A prior valid id remains
                 // the last syntactically valid `id` pair.
                 continue;
             }
+            if value.len() > MAX_ID_BYTES {
+                return Err(RejectionReason::IdTooLong);
+            }
+            check_id_limits(value)?;
             fields.id = Some(value);
             continue;
         }

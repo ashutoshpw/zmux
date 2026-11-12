@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "candidate_kind": "source",
+  "candidate_set": "ghostty-7501-v1",
+  "base_candidate_sha256": "038aa8eb5dd381c353733550e95579221e1ea6967ae03a860c486436eb690c12",
+  "upstream_inputs_sha256": "f96041d8d5b6af22ba1751bd7e76adb91b8331f9de0276c45aacadacd9e6019b",
+  "recipe_sha256": "f57162b68a7866935bbd7662629b7508a4fbd6102134a5cd10efa21010be914d",
+  "source_inputs_sha256": {
+    "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02",
+    "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
+    "tools/terminal-feasibility/program-status-v0.4.patch": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+  },
+  "patches": [
+    {
+      "path": "tools/terminal-feasibility/resource.patch",
+      "sha256": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02"
+    },
+    {
+      "path": "tools/terminal-feasibility/metadata.patch",
+      "sha256": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7"
+    },
+    {
+      "path": "tools/terminal-feasibility/program-status-v0.4.patch",
+      "sha256": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+    }
+  ],
+  "post_patch_headers_sha256": {
+    "include/ghostty/vt/allocator.h": "77ab59b7be308454ca31fedd203bc43c219869e2ef869a8001549958906b4fd1",
+    "include/ghostty/vt/build_info.h": "535e44c29b5fd9c8df172605f58616df735432f7786ca24e3cc58d7cb3ba8361",
+    "include/ghostty/vt/color.h": "73e0db10e4b324122be1a8a46bb6619fe5ab264bf6713543336c3e5deb7035f3",
+    "include/ghostty/vt/color_scheme.h": "eab0dc56e057dfc03334cba109da6e7ae118513cb2be9dc4f3b0bffc7bdad465",
+    "include/ghostty/vt/device.h": "79c61cd5d54fc15c60d0ce87c69adf89c85b7b748b912c41b91230979f4319fe",
+    "include/ghostty/vt/focus.h": "ddc28ead578ca9f683a4140420807ec9988a45f669d719e28cdf840913ea56b4",
+    "include/ghostty/vt/formatter.h": "9945b7aff284597d8801eb9201abc95609b3cf71360e14f2db6b8a527838a8cd",
+    "include/ghostty/vt/grid_ref.h": "80cc49f02d63025605d605c86f1207638ad9534ce74e9a14766299e0518d4987",
+    "include/ghostty/vt/grid_ref_tracked.h": "78c65cf69c1a6ee439849175221084366ca4392455503cc44e93cfdf9ddbc021",
+    "include/ghostty/vt/io.h": "2d79995aadc23ce175b519e3ff401ca20664da9068177aac117e0b490f45daee",
+    "include/ghostty/vt/key/encoder.h": "6963a275e2ba154a647382c462c416840dcdc2beb6d59aa200d80f37f9a5e196",
+    "include/ghostty/vt/key/event.h": "0eb11bfab67b887f4b409557b396a5da6ea17e9e62d92b97a38e723b46db635d",
+    "include/ghostty/vt/key.h": "2de93a84da8e9c1c1f6ac8d1d281ba054869225858a5d88ec8ec5f0d091b5eac",
+    "include/ghostty/vt/kitty_graphics.h": "a7e1f37191684e66835b54339fe714b14eaa882b5c1d3459fb6fc8b4a32ec8eb",
+    "include/ghostty/vt/modes.h": "bd40aa01f76e4351e09a1825693b27c1e4a53539411968432fc3e59e0f890f66",
+    "include/ghostty/vt/mouse/encoder.h": "2e409c50fcd06806dd1a86cf66751ff35362c65e14ff588e2592e8a09141c017",
+    "include/ghostty/vt/mouse/event.h": "68f14cd03109919cb8da36b17f70670334a3369af5c685496118c913c3049abf",
+    "include/ghostty/vt/mouse.h": "271fc3af121eb323f28d3e467b6d9cde1075b3ac3c400f7e25cc05dd5af03663",
+    "include/ghostty/vt/osc.h": "c535e8e67bc5030e6881a77463567017201b2ae3b218a17b53725c56786a45ae",
+    "include/ghostty/vt/paste.h": "d82f8fd498a296220caf39b2aeeedf195fa287b020955c27613b6c55cf80eeba",
+    "include/ghostty/vt/point.h": "1ed7b2cda14904814727b93d406f39284e8392af706f938cf0fa1dbeaa42e774",
+    "include/ghostty/vt/render.h": "9918257a2862fa1fce3e4e22a63da70a98a0883ffb6894a3094057d8721aa2a2",
+    "include/ghostty/vt/screen.h": "d9a3ab36f8410184fd0af4a20de1c1d3a0f09e8bd28ec2de89cb243dbd008fa3",
+    "include/ghostty/vt/search.h": "0a7ff9bd9079f351ff2d255f8d60d33638a5ebc79c1c8076b47b332b47e40c21",
+    "include/ghostty/vt/selection.h": "839b495f8e24ed678fd71b6eeb75a7cebd9d634334a3303ec31d05d468f2c520",
+    "include/ghostty/vt/sgr.h": "8292084973e64ce61555c6721591411dba9cf968ea9ae2d9820b4f6c381f1ce5",
+    "include/ghostty/vt/size_report.h": "7f7a77311ab155ad13e934ed6a94274e2b02207dba529a951c8f8319b0ac9ab7",
+    "include/ghostty/vt/snapshot.h": "da28242bd1cebfa2e313cbbaee160c06573c7990119c8e021b4433d9b3d90b40",
+    "include/ghostty/vt/style.h": "ebb50a1821952dd954dd51d5897f9881c6927abd73b909e2e2f1deb3a52f31a9",
+    "include/ghostty/vt/sys.h": "8f83a9f4e7132d917559b3ceb9dc8145c318e2ce419c2948cbab7cc6faafd69b",
+    "include/ghostty/vt/terminal.h": "e5e4a44c842a04036df0b2026cb395297022d56ff3cb2867859f9c64ed5f8ff4",
+    "include/ghostty/vt/types.h": "6c30315aa292971c5863b90ace46d241682f8baac2fe9244acb785b0c883020e",
+    "include/ghostty/vt/unicode.h": "d5533c9abcebc9284033eb9c6acc0ed707a3a68a98f0d2e3d8c9b28a2beae796",
+    "include/ghostty/vt/wasm.h": "0136093c504af9fb2a33b7e50a70cb6b4cee0c2375beed3d73b579c092195fee",
+    "include/ghostty/vt/zmux_metadata.h": "127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c",
+    "include/ghostty/vt.h": "014813d7dba136ae6faecb515d23e7d7dc675672094174f91e2d84ab2bb55732",
+    "include/ghostty.h": "0d87da6fbde0f40f83793e012d13c82705cf960b34c34bd73b8598fd1c8f229a"
+  }
+}
