@@ -2,7 +2,7 @@
 
 - **State:** in-progress
 - **Updated:** 2026-11-12
-- **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Remaining feature source is uncommitted.
+- **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Integration source committed and pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
 
 ## Current overall acceptance
 
@@ -76,9 +76,17 @@
   instead of the required forced-deadline outcome. A bounded Session owner
   remediation is in progress; all assertions and deadlines remain required.
   Evidence: `/tmp/zmux-osc7501-check-round3.log` and `.json`.
-- No feature source has been pushed. No fresh Ghostty libraries, linked execution
-  receipt or accepted macOS artifact exists yet. Native compilation/execution is
-  unavailable on this Linux host and requires the hosted gates.
+- Integration source is pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
+  Foundation run `43299857515` and macOS run `43299857734` started on that source.
+  macOS Swift typecheck failed at `ProgramSidebarViews.swift:602-606`: the
+  tuple-returning helper needs an explicit switch return after its guard. A
+  narrow native source repair is complete in the shared checkout; see
+  [Swift typecheck repair](references/swift-typecheck-repair.md). No accepted app
+  artifact exists.
+  Fresh Ghostty producer run `43300002338` builds both slices without reuse.
+  Actual libraries, independent byte review and linked acceptance remain pending.
+  The connector dispatch returned 403; the authorized local GitHub CLI dispatch
+  succeeded. Native compilation/execution remains hosted-only on this Linux host.
 - Historical planning/discovery notes below describe the entry state and are
   superseded by the implemented source and current acceptance above.
 
@@ -358,3 +366,17 @@ dispatch or app manipulation was performed.
   focused rerun then passed both checkpoint tests.
 - The full `scripts/check`, linked Ghostty execution, hosted checks, commit,
   push, and packaged macOS acceptance remain with the parent.
+
+## Hosted follow-up and Swift repair
+
+- `scripts/check` after the one-line Swift return fix passed **756/0/7** in
+  256.43 seconds; source fingerprints and unrelated preservation matched.
+- Foundation Linux passed at `3b38518`. Foundation macOS failed the real local
+  Codex route admission; later provider-hook failures were mutex-poison cascades.
+  Log `/tmp/zmux-osc7501-foundation-macos-failure.log`. A bounded owner diagnosis
+  is in progress; no Mac acceptance is inferred from the Linux pass.
+- Ghostty producer `43300002338` failed its old metadata fixture at RIS metadata,
+  after fresh ARM library/C ABI compilation and inspection. Failed diagnostic
+  artifact `13980787888` was downloaded and API SHA-256/size verified. It is not
+  an accepted library artifact; exact failure and versioned harness repair are
+  being investigated while historical fixture pins remain unchanged.

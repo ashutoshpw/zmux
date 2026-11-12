@@ -598,7 +598,7 @@ private final class ProgramSidebarRowView: BackgroundView {
 
     private static func statusStyle(_ state: ProgramStatusState, availability: ProgramStatusAvailability) -> (String, NSColor) {
         guard availability == .available else { return ("clock", ZmuxPalette.inactive) }
-        switch state {
+        return switch state {
         case .idle: ("circle", ZmuxPalette.inactive)
         case .working: ("circle.dashed", ZmuxPalette.success)
         case .done: ("checkmark.circle.fill", ZmuxPalette.success)

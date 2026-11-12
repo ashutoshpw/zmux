@@ -66,5 +66,6 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/graceful-close-repair.md](references/graceful-close-repair.md) — aborted-frame publication regression, bounded close polling and focused Session results.
 - [references/portable-validation.md](references/portable-validation.md) — stable integrated full-check pass, source fingerprints and explicit hosted gates.
 - [references/final-session-repairs-recheck.md](references/final-session-repairs-recheck.md) — independent acceptance and focused re-execution of the final two Session repairs.
+- [references/swift-typecheck-repair.md](references/swift-typecheck-repair.md) — explicit tuple-switch return for hosted Swift6 compilation.
 - [Protocol specification](https://superlogical.com/rex/docs/build/program-status) — revision 0.4, dated 2026-10-10.
 - [Existing provider task](../../2026-11-01/01-live-agent-sidebar/plan.md) — adapter and alert guarantees to preserve.
