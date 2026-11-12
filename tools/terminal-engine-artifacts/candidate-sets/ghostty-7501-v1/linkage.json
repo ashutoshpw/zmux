@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "candidate_kind": "accepted_linkage",
+  "candidate_set": "ghostty-7501-v1",
+  "scope": "Exact freshly produced versioned OSC 7501 Darwin libraries for opt-in linkage; ARM fixture execution only; Intel runtime and packaged app acceptance separate.",
+  "source_candidate": {
+    "candidate_set": "ghostty-7501-v1",
+    "path": "tools/terminal-engine-artifacts/candidate-sets/ghostty-7501-v1/source.json",
+    "sha256": "d19f74d9138b065014b17fb9deef9d9a2e653e6b0fd8c022eef3d1f7868d9cd8"
+  },
+  "darwin": {
+    "producer_sha256": "e68fd9637da96fd89c710cd525f4185fc3d0718438b99c12c41a11c3f0a2cfcc",
+    "library_recipe_sha256": "6c80d3798197d5c014f8962ab2a79306a938aba399343ad32df1c6b9cec99cc8",
+    "independent_review_sha256": "d93863dea15ad80f36b9ae6701f1f8192003b0219fd6c7c1667e152d71ad0064",
+    "independent_review_path": "evidence/ghostty-7501-v1-independent-review.json",
+    "source_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
+    "libraries": {
+      "aarch64-apple-darwin": "37e4296467733d9ee13e0005d555969ecc6c9500183ce568381fbecb177f3ad5",
+      "x86_64-apple-darwin": "ce663b3259e064bd2d3de8bccaf895bae5202753b0ac8123306cde5429467464"
+    },
+    "supplement": {},
+    "download": {
+      "repository": "ashutoshpw/zmux",
+      "run": 43315098805,
+      "artifact": 13988885464,
+      "name": "terminal-engine-darwin-thin-7bf0864f9155384684f8fe92be8e9c547fdd9add",
+      "archive_sha256": "aa232650b06d2c9184e94cfd41f38d80d91f61901726a703aed25b7ade69b855",
+      "archive_bytes": 9322902
+    }
+  },
+  "shim_inputs_sha256": {
+    "tools/terminal-feasibility/collector.c": "0cedd95c24bf2ec731ec69118040db84a81f424fd2afbd19b74de293296d20f9",
+    "tools/terminal-feasibility/collector.h": "8ffcd98be2080e5bc761972f533b86312f59587ef64ea9113e3bc135dcdba842",
+    "tools/terminal-feasibility/effects.c": "184e801e93da2beae5fd8c3fac05949de80338fa8b6ce149c856168e993d027a",
+    "tools/terminal-feasibility/effects.h": "15d879c3291aab2f21b5a2039c58a7da837af0db6e29cf78eae9c6b7d40a4ebf",
+    "tools/terminal-feasibility/frame.h": "8231f0f4f66a8c9f9b937b13aa8a93cfbc16b10448cb706c8ae4e85b05cfa6f7",
+    "tools/terminal-feasibility/integrated.c": "1a5885cb31b59e9248d8be138c8b0a7856aeda169fb264bbf2d0a4e55d38d411",
+    "tools/terminal-feasibility/integrated.h": "c7feb9d0e8f96259ebbfcc1f3955b3a50acaafe4f3746f6b2e368de4aaaaf3f1",
+    "tools/terminal-feasibility/metadata.c": "2aecb5464b8dd3c818051459b99cd650e0d9129aeda73021da71e81a88fd747e",
+    "tools/terminal-feasibility/metadata.h": "cc9d2b5fe115b8c2912d675ebea17b11d3ba89fa517b300aa5febc71dec31ce9",
+    "tools/terminal-feasibility/probe.c": "11c6d127d264d8cfbd326fa3c630d08dcf10589808ab3a6b4bf99925c0c4eaac",
+    "tools/terminal-feasibility/resource-internal.h": "fdd872054abe433dc4bb2932241e60cec5f059516c4d18d1b6b71c8d6a8b0e54",
+    "tools/terminal-feasibility/resource.c": "1acb646ac30a77f792218bb0ae5aeaa02607008aafd6600e4a8f21b1ec7397ff",
+    "tools/terminal-feasibility/resource.h": "ff3cdb28662bc65669a51a79b027728d4cb86bd2bc669cc9792e38a13dac72ca"
+  }
+}

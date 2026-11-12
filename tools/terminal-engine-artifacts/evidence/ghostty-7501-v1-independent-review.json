@@ -1,0 +1,565 @@
+{
+  "arm64_native_fixture_phases": {
+    "c-abi-native-arm64": {
+      "exit_code": 0,
+      "log_matches_recorded_stdout_after_final_newline": true,
+      "log_path": "c-abi-native-arm64.log",
+      "log_sha256": "158c10dd6b1f8a38a9f861a11f6ccd62d31365092edc3e01d1250d898e5fe4a4",
+      "recorded_stdout": "FIXTURE_LIMITS={\"RLIMIT_AS\": {\"reason\": \"ValueError\", \"state\": \"unavailable\"}, \"RLIMIT_CORE\": {\"state\": \"configured\", \"value\": 0}, \"RLIMIT_CPU\": {\"state\": \"configured\", \"value\": 3}}\ndarwin_abi_success=true pointer_bits=64 frame=72 cell=28 metadata=40",
+      "timed_out": false
+    },
+    "metadata-native-arm64": {
+      "exit_code": 0,
+      "log_matches_recorded_stdout_after_final_newline": true,
+      "log_path": "metadata-native-arm64.log",
+      "log_sha256": "6a4933580652ca751f6d971180390322b89ddd38933146cc281b893c514ce7be",
+      "recorded_stdout": "FIXTURE_LIMITS={\"RLIMIT_AS\": {\"reason\": \"ValueError\", \"state\": \"unavailable\"}, \"RLIMIT_CORE\": {\"state\": \"configured\", \"value\": 0}, \"RLIMIT_CPU\": {\"state\": \"configured\", \"value\": 3}}\nmetadata: semicolon/title/body, exact source/subcommand, abort, RIS/DECSTR, UTF8/bidi, exact cwd/ring pass; rust_capacity_bytes=1693696; inline_bytes=3064; c_fixed_bytes=201056\nmetadata_success=true",
+      "timed_out": false
+    }
+  },
+  "artifact": {
+    "api_digest": "sha256:aa232650b06d2c9184e94cfd41f38d80d91f61901726a703aed25b7ade69b855",
+    "api_run_head_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
+    "api_run_id": 43315098805,
+    "archive_bytes": 9322902,
+    "archive_sha256": "aa232650b06d2c9184e94cfd41f38d80d91f61901726a703aed25b7ade69b855",
+    "artifact_api_size_bytes": 9322902,
+    "artifact_expired": false,
+    "artifact_id": 13988885464,
+    "artifact_name": "terminal-engine-darwin-thin-7bf0864f9155384684f8fe92be8e9c547fdd9add",
+    "extracted_file_count": 332,
+    "head_branch": "main",
+    "head_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
+    "job": {
+      "conclusion": "success",
+      "name": "darwin-slices",
+      "status": "completed"
+    },
+    "repository": "ashutoshpw/zmux",
+    "run_attempt": 1,
+    "run_conclusion": "success",
+    "run_status": "completed",
+    "unsafe_or_mismatched_entries": [],
+    "workflow_event": "workflow_dispatch",
+    "workflow_name": "Terminal engine Darwin artifacts",
+    "workflow_path": ".github/workflows/terminal-engine-artifacts.yml",
+    "workflow_run_id": 43315098805,
+    "zip_equals_extracted_file_set": true,
+    "zip_file_count": 332
+  },
+  "candidate_linkage_pins": {
+    "candidate_kind": "accepted_linkage",
+    "candidate_set": "ghostty-7501-v1",
+    "darwin": {
+      "download": {
+        "archive_bytes": 9322902,
+        "archive_sha256": "aa232650b06d2c9184e94cfd41f38d80d91f61901726a703aed25b7ade69b855",
+        "artifact": 13988885464,
+        "name": "terminal-engine-darwin-thin-7bf0864f9155384684f8fe92be8e9c547fdd9add",
+        "repository": "ashutoshpw/zmux",
+        "run": 43315098805
+      },
+      "independent_review_sha256": "c9917e1bc9f804255c72b8ed29b141a670100653dac44b18c9df0d5251963fa4",
+      "libraries": {
+        "aarch64-apple-darwin": "37e4296467733d9ee13e0005d555969ecc6c9500183ce568381fbecb177f3ad5",
+        "x86_64-apple-darwin": "ce663b3259e064bd2d3de8bccaf895bae5202753b0ac8123306cde5429467464"
+      },
+      "library_recipe_sha256": "6c80d3798197d5c014f8962ab2a79306a938aba399343ad32df1c6b9cec99cc8",
+      "producer_sha256": "e68fd9637da96fd89c710cd525f4185fc3d0718438b99c12c41a11c3f0a2cfcc",
+      "requested_review_document_path_from_repo_root": ".agents/tasks/2026-11-12/01-osc-7501-support/references/ghostty-produced-artifact-review.md",
+      "source_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
+      "supplement": {}
+    },
+    "schema_version": 1,
+    "source_candidate": {
+      "candidate_set": "ghostty-7501-v1",
+      "path": "tools/terminal-engine-artifacts/candidate-sets/ghostty-7501-v1/source.json",
+      "sha256": "d19f74d9138b065014b17fb9deef9d9a2e653e6b0fd8c022eef3d1f7868d9cd8"
+    }
+  },
+  "headers_and_notices": {
+    "header_count_receipt": 37,
+    "header_count_source_candidate": 37,
+    "header_inventory_equal": true,
+    "header_missing_or_mismatched": [],
+    "notice_entries": 80,
+    "notice_files_hashed": 80,
+    "notice_missing_or_mismatched": [],
+    "runtime_notice_sources_matched": 37
+  },
+  "intel_execution": {
+    "c_abi_native_phase_present": false,
+    "compile_and_link_phases_passed": true,
+    "intel_execution_verified": false,
+    "metadata_native_phase_present": false,
+    "target_execution": "not_run_cross_architecture"
+  },
+  "linkage_review_path_constraint": {
+    "checked_file_rejects_resolved_paths_outside_base": true,
+    "checker_base": "tools/terminal-engine-artifacts",
+    "impact": "The current checker cannot pin this review at its requested .agents/tasks location without an in-root copy or validator change.",
+    "requested_review_document_is_inside_checker_base": false,
+    "validator_call": "checked_file(HERE, independent_review_path, independent_review_sha256)"
+  },
+  "producer_receipt": {
+    "canonical_recipe_fields": [
+      "recipe",
+      "ghostty",
+      "zig",
+      "patches_sha256",
+      "developer",
+      "headers_sha256"
+    ],
+    "canonical_recipe_matches_receipt": true,
+    "canonical_recipe_sha256_recomputed": "6c80d3798197d5c014f8962ab2a79306a938aba399343ad32df1c6b9cec99cc8",
+    "claims": {
+      "app_linked": false,
+      "bit_identical_rebuild_verified": false,
+      "engine_selected": false,
+      "intel_execution_verified": false,
+      "minimum_os_execution_verified": false,
+      "performance_measured": false,
+      "universal_assembled": false
+    },
+    "deployment_policy": {
+      "consumer_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "library_object_minimum_macos": [
+        13,
+        0,
+        0
+      ],
+      "requested_zig_target_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "schema_version": 1,
+      "scope": "Exact upstream library declaration 13.0, compatible with consumers deployed at 14.0. The compiler recipe remains requested-target 14.0. No archive-14.0 declaration or execution on macOS 13/14 is claimed.",
+      "upstream_override": {
+        "evidence": "Config.init lines 94-98 replaces the requested native Darwin target with genericMacOSTarget; lines 789-797 and 820-829 select macOS 13.0 without preserving the requested version.",
+        "path": "src/build/Config.zig",
+        "sha256": "e15abd51f767a70c92faac2bc8bf86fbb096db6680bca3de7388b9a4568fd739"
+      }
+    },
+    "library_recipe": {
+      "developer": {
+        "clang": "Apple clang version 17.0.0 (clang-1700.0.13.5)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+        "host_macos": "15.8.2",
+        "rust": "rustc 1.95.0 (59807616e 2026-04-14)",
+        "sdk_path": "/Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk",
+        "sdk_settings_sha256": "58a133735f0a55a624a1703067059f6e78925e51725ec6e1f966072e142c9c42",
+        "sdk_version": "15.5",
+        "xcode": "Xcode 16.4\nBuild version 16F6"
+      },
+      "ghostty": {
+        "commit": "22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+        "license": "MIT",
+        "root": "ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+        "sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+        "url": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+        "version": "1.3.2-dev"
+      },
+      "headers_sha256": {
+        "include/ghostty.h": "0d87da6fbde0f40f83793e012d13c82705cf960b34c34bd73b8598fd1c8f229a",
+        "include/ghostty/vt.h": "014813d7dba136ae6faecb515d23e7d7dc675672094174f91e2d84ab2bb55732",
+        "include/ghostty/vt/allocator.h": "77ab59b7be308454ca31fedd203bc43c219869e2ef869a8001549958906b4fd1",
+        "include/ghostty/vt/build_info.h": "535e44c29b5fd9c8df172605f58616df735432f7786ca24e3cc58d7cb3ba8361",
+        "include/ghostty/vt/color.h": "73e0db10e4b324122be1a8a46bb6619fe5ab264bf6713543336c3e5deb7035f3",
+        "include/ghostty/vt/color_scheme.h": "eab0dc56e057dfc03334cba109da6e7ae118513cb2be9dc4f3b0bffc7bdad465",
+        "include/ghostty/vt/device.h": "79c61cd5d54fc15c60d0ce87c69adf89c85b7b748b912c41b91230979f4319fe",
+        "include/ghostty/vt/focus.h": "ddc28ead578ca9f683a4140420807ec9988a45f669d719e28cdf840913ea56b4",
+        "include/ghostty/vt/formatter.h": "9945b7aff284597d8801eb9201abc95609b3cf71360e14f2db6b8a527838a8cd",
+        "include/ghostty/vt/grid_ref.h": "80cc49f02d63025605d605c86f1207638ad9534ce74e9a14766299e0518d4987",
+        "include/ghostty/vt/grid_ref_tracked.h": "78c65cf69c1a6ee439849175221084366ca4392455503cc44e93cfdf9ddbc021",
+        "include/ghostty/vt/io.h": "2d79995aadc23ce175b519e3ff401ca20664da9068177aac117e0b490f45daee",
+        "include/ghostty/vt/key.h": "2de93a84da8e9c1c1f6ac8d1d281ba054869225858a5d88ec8ec5f0d091b5eac",
+        "include/ghostty/vt/key/encoder.h": "6963a275e2ba154a647382c462c416840dcdc2beb6d59aa200d80f37f9a5e196",
+        "include/ghostty/vt/key/event.h": "0eb11bfab67b887f4b409557b396a5da6ea17e9e62d92b97a38e723b46db635d",
+        "include/ghostty/vt/kitty_graphics.h": "a7e1f37191684e66835b54339fe714b14eaa882b5c1d3459fb6fc8b4a32ec8eb",
+        "include/ghostty/vt/modes.h": "bd40aa01f76e4351e09a1825693b27c1e4a53539411968432fc3e59e0f890f66",
+        "include/ghostty/vt/mouse.h": "271fc3af121eb323f28d3e467b6d9cde1075b3ac3c400f7e25cc05dd5af03663",
+        "include/ghostty/vt/mouse/encoder.h": "2e409c50fcd06806dd1a86cf66751ff35362c65e14ff588e2592e8a09141c017",
+        "include/ghostty/vt/mouse/event.h": "68f14cd03109919cb8da36b17f70670334a3369af5c685496118c913c3049abf",
+        "include/ghostty/vt/osc.h": "c535e8e67bc5030e6881a77463567017201b2ae3b218a17b53725c56786a45ae",
+        "include/ghostty/vt/paste.h": "d82f8fd498a296220caf39b2aeeedf195fa287b020955c27613b6c55cf80eeba",
+        "include/ghostty/vt/point.h": "1ed7b2cda14904814727b93d406f39284e8392af706f938cf0fa1dbeaa42e774",
+        "include/ghostty/vt/render.h": "9918257a2862fa1fce3e4e22a63da70a98a0883ffb6894a3094057d8721aa2a2",
+        "include/ghostty/vt/screen.h": "d9a3ab36f8410184fd0af4a20de1c1d3a0f09e8bd28ec2de89cb243dbd008fa3",
+        "include/ghostty/vt/search.h": "0a7ff9bd9079f351ff2d255f8d60d33638a5ebc79c1c8076b47b332b47e40c21",
+        "include/ghostty/vt/selection.h": "839b495f8e24ed678fd71b6eeb75a7cebd9d634334a3303ec31d05d468f2c520",
+        "include/ghostty/vt/sgr.h": "8292084973e64ce61555c6721591411dba9cf968ea9ae2d9820b4f6c381f1ce5",
+        "include/ghostty/vt/size_report.h": "7f7a77311ab155ad13e934ed6a94274e2b02207dba529a951c8f8319b0ac9ab7",
+        "include/ghostty/vt/snapshot.h": "da28242bd1cebfa2e313cbbaee160c06573c7990119c8e021b4433d9b3d90b40",
+        "include/ghostty/vt/style.h": "ebb50a1821952dd954dd51d5897f9881c6927abd73b909e2e2f1deb3a52f31a9",
+        "include/ghostty/vt/sys.h": "8f83a9f4e7132d917559b3ceb9dc8145c318e2ce419c2948cbab7cc6faafd69b",
+        "include/ghostty/vt/terminal.h": "e5e4a44c842a04036df0b2026cb395297022d56ff3cb2867859f9c64ed5f8ff4",
+        "include/ghostty/vt/types.h": "6c30315aa292971c5863b90ace46d241682f8baac2fe9244acb785b0c883020e",
+        "include/ghostty/vt/unicode.h": "d5533c9abcebc9284033eb9c6acc0ed707a3a68a98f0d2e3d8c9b28a2beae796",
+        "include/ghostty/vt/wasm.h": "0136093c504af9fb2a33b7e50a70cb6b4cee0c2375beed3d73b579c092195fee",
+        "include/ghostty/vt/zmux_metadata.h": "127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c"
+      },
+      "patches_sha256": {
+        "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
+        "tools/terminal-feasibility/program-status-v0.4.patch": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925",
+        "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02"
+      },
+      "recipe": {
+        "build_jobs": 2,
+        "developer_dir": "/Applications/Xcode_16.4.app/Contents/Developer",
+        "minimum_macos": "14.0",
+        "optimize": "ReleaseSafe",
+        "recipe_version": 1,
+        "rust_version": "1.95.0",
+        "schema_version": 1,
+        "sdk_version": "15.5",
+        "simd": false,
+        "targets": [
+          {
+            "architecture": "arm64",
+            "execute": true,
+            "rust": "aarch64-apple-darwin",
+            "zig": "aarch64-macos.14.0"
+          },
+          {
+            "architecture": "x86_64",
+            "execute": false,
+            "rust": "x86_64-apple-darwin",
+            "zig": "x86_64-macos.14.0"
+          }
+        ],
+        "vt_features": "-all,+render-state,+grid-introspection,+formatter,+input-encode",
+        "xcode_version": "16.4",
+        "zig_version": "0.16.0"
+      },
+      "zig": {
+        "root": "zig-aarch64-macos-0.16.0",
+        "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+        "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz"
+      }
+    },
+    "library_recipe_sha256": "6c80d3798197d5c014f8962ab2a79306a938aba399343ad32df1c6b9cec99cc8",
+    "metadata_fixture": {
+      "base_owner_sha256": "8abf975e8737f093062452f71b006dd5f39927cdfd3402a133026176e4c395d1",
+      "entrypoint_path": "tools/terminal-feasibility/metadata.rs",
+      "entrypoint_sha256": "9d9f64b18cc400362e684d2e8abd96eee44a5457ed5674393287475c7caf7b3b",
+      "integrated_sha256": "c115496beb3e5de74f84d21c23b34455aaa575fdf9dda57fe5c168677822a140",
+      "owner_path": "tools/terminal-feasibility/metadata-owner.rs",
+      "patched_owner_sha256": "0ba0b8fd1b99358d5b5666fc6011a0048adfe1b0fe0529eb103fa243bf8c96d1",
+      "patches": [
+        {
+          "path": "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch",
+          "sha256": "1aeaedaf7004dbc2af5ff618d2c3c566f12ece2515c8a29d127b3e039a181e33"
+        }
+      ]
+    },
+    "runtime_notice_sources_matched": 37,
+    "sha256": "e68fd9637da96fd89c710cd525f4185fc3d0718438b99c12c41a11c3f0a2cfcc",
+    "source_candidate": {
+      "candidate_set": "ghostty-7501-v1",
+      "path": "tools/terminal-engine-artifacts/candidate-sets/ghostty-7501-v1/source.json",
+      "sha256": "d19f74d9138b065014b17fb9deef9d9a2e653e6b0fd8c022eef3d1f7868d9cd8"
+    },
+    "source_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
+    "state": "complete"
+  },
+  "proof_limits": [
+    "Linux review host parsed and hashed actual Mach-O files but did not execute them.",
+    "ARM64 c-abi and metadata fixture execution is evidenced by the exact successful hosted run logs.",
+    "Intel libraries and fixture executables compiled and linked but were not executed.",
+    "No app link, universal assembly, production engine selection, macOS 13/14 runtime, physical hardware, or packaged application acceptance is established.",
+    "Hosted Rust/Session linkage acceptance remains a separate gate."
+  ],
+  "review": {
+    "date": "2026-11-12",
+    "document_path": ".agents/tasks/2026-11-12/01-osc-7501-support/references/ghostty-produced-artifact-review.md",
+    "document_sha256": "f613fbf9f58020ffa3e0176a4c85c5b9567fb207b2d4f5cd6dfcb9d0b34eb32b",
+    "kind": "independent_actual_producer_artifact_acceptance",
+    "reviewer_host": "Linux",
+    "scope_verdict": "accepted_exact_Darwin_libraries_for_opt_in_ghostty_7501_linkage"
+  },
+  "schema_version": 1,
+  "source_bundle": {
+    "captured_inputs_checked_against_exact_git_show": 150,
+    "manifest_input_count": 150,
+    "manifest_inventory_matches_receipt": true,
+    "manifest_sha256": "37ac0a2420b70be6879311dfd7c330ec552184ad19126bbfad3620e04bda42fc",
+    "missing_or_mismatched_inputs": [],
+    "receipt_input_count": 150,
+    "separate_source_supplement_required": false,
+    "source_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add"
+  },
+  "source_candidate_and_patches": {
+    "engine_patch_order": [
+      {
+        "path": "tools/terminal-feasibility/resource.patch",
+        "sha256": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02"
+      },
+      {
+        "path": "tools/terminal-feasibility/metadata.patch",
+        "sha256": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7"
+      },
+      {
+        "path": "tools/terminal-feasibility/program-status-v0.4.patch",
+        "sha256": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+      }
+    ],
+    "exact_patch_pins": {
+      "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
+      "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch": "1aeaedaf7004dbc2af5ff618d2c3c566f12ece2515c8a29d127b3e039a181e33",
+      "tools/terminal-feasibility/program-status-v0.4.patch": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925",
+      "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02"
+    },
+    "fixture_patch_chain": [
+      {
+        "base_sha256": "8abf975e8737f093062452f71b006dd5f39927cdfd3402a133026176e4c395d1",
+        "path": "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch",
+        "sha256": "1aeaedaf7004dbc2af5ff618d2c3c566f12ece2515c8a29d127b3e039a181e33",
+        "target": "tools/terminal-feasibility/metadata-owner.rs"
+      }
+    ],
+    "fixture_patched_owner_reconstructed_sha256": "0ba0b8fd1b99358d5b5666fc6011a0048adfe1b0fe0529eb103fa243bf8c96d1",
+    "source_candidate_path": "tools/terminal-engine-artifacts/candidate-sets/ghostty-7501-v1/source.json",
+    "source_candidate_sha256": "d19f74d9138b065014b17fb9deef9d9a2e653e6b0fd8c022eef3d1f7868d9cd8",
+    "unchanged_program_status_engine_supplement_sha256": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+  },
+  "targets": {
+    "arm64": {
+      "consumer_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "effective_library_minimum_macos": [
+        13,
+        0,
+        0
+      ],
+      "fixture_executables": {
+        "c-abi": {
+          "architecture": "arm64",
+          "bytes": 1974920,
+          "file_type_code": 2,
+          "minimum_macos": [
+            14,
+            0,
+            0
+          ],
+          "sdk": [
+            15,
+            5,
+            0
+          ],
+          "sha256": "6d3454ef9f8632a1e20438df4c90512e65b3f572191bf9926c6665deeea508f1",
+          "uuid": "3534c854-45df-3272-b32d-c83a8fbe3b95"
+        },
+        "metadata-fixture": {
+          "architecture": "arm64",
+          "bytes": 2047728,
+          "file_type_code": 2,
+          "minimum_macos": [
+            14,
+            0,
+            0
+          ],
+          "sdk": [
+            15,
+            5,
+            0
+          ],
+          "sha256": "01d3689b60ebb832bb12dbd351d182a9772ab95df349013ec23c037d68fedfa8",
+          "uuid": "6633ebe3-974c-39d0-9f47-fa4588d3c67a"
+        }
+      },
+      "library": {
+        "bytes": 9082128,
+        "execution": "passed_on_arm64_runner",
+        "members": [
+          {
+            "architecture": "arm64",
+            "bytes": 7987944,
+            "file_type_code": 1,
+            "minimum_macos": [
+              13,
+              0,
+              0
+            ],
+            "name": "libghostty-vt-static_zcu.o",
+            "sdk": [
+              0,
+              0,
+              0
+            ],
+            "sha256": "ad1fe0f877cfbd8b1f59d0e83768663a0f3f4877261516a652ef2cf3e4fbd0d8",
+            "uuid": null
+          },
+          {
+            "architecture": "arm64",
+            "bytes": 1079224,
+            "file_type_code": 1,
+            "minimum_macos": [
+              13,
+              0,
+              0
+            ],
+            "name": "compiler_rt.o",
+            "sdk": [
+              0,
+              0,
+              0
+            ],
+            "sha256": "1eecde2a5c545c1e7631f2408375ad014266e3bbc652da2ff291519bb40c9cac",
+            "uuid": null
+          }
+        ],
+        "path": "bundle/arm64/libghostty-vt.a",
+        "receipt_sha256": "37e4296467733d9ee13e0005d555969ecc6c9500183ce568381fbecb177f3ad5",
+        "reused": false,
+        "sha256": "37e4296467733d9ee13e0005d555969ecc6c9500183ce568381fbecb177f3ad5"
+      },
+      "receipt_binary_sha256": {
+        "c-abi": "6d3454ef9f8632a1e20438df4c90512e65b3f572191bf9926c6665deeea508f1",
+        "metadata-fixture": "01d3689b60ebb832bb12dbd351d182a9772ab95df349013ec23c037d68fedfa8"
+      },
+      "requested_target_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "target": "aarch64-apple-darwin",
+      "zig_target": "aarch64-macos.14.0"
+    },
+    "x86_64": {
+      "consumer_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "effective_library_minimum_macos": [
+        13,
+        0,
+        0
+      ],
+      "fixture_executables": {
+        "c-abi": {
+          "architecture": "x86_64",
+          "bytes": 2067872,
+          "file_type_code": 2,
+          "minimum_macos": [
+            14,
+            0,
+            0
+          ],
+          "sdk": [
+            15,
+            5,
+            0
+          ],
+          "sha256": "bce5a63a5d32530e36dd831a1ac6d26dc91457e3730c87bdc011599dc0fe8992",
+          "uuid": "aba9abb2-a3d9-3cf0-b042-f576d8905041"
+        },
+        "metadata-fixture": {
+          "architecture": "x86_64",
+          "bytes": 2115368,
+          "file_type_code": 2,
+          "minimum_macos": [
+            14,
+            0,
+            0
+          ],
+          "sdk": [
+            15,
+            5,
+            0
+          ],
+          "sha256": "8cfa9a628087b5bf66d2bec8ae7e5ee37ff6366972214c0eee196c60e567e453",
+          "uuid": "e773d61b-3a33-363d-a057-7ffb69a8d3c7"
+        }
+      },
+      "library": {
+        "bytes": 9254272,
+        "execution": "not_run_cross_architecture",
+        "members": [
+          {
+            "architecture": "x86_64",
+            "bytes": 8204040,
+            "file_type_code": 1,
+            "minimum_macos": [
+              13,
+              0,
+              0
+            ],
+            "name": "libghostty-vt-static_zcu.o",
+            "sdk": [
+              0,
+              0,
+              0
+            ],
+            "sha256": "32af1aa5d122db46d55ebdc149c149a2e84035a5ef92cef1087aa827e40aefaa",
+            "uuid": null
+          },
+          {
+            "architecture": "x86_64",
+            "bytes": 1035200,
+            "file_type_code": 1,
+            "minimum_macos": [
+              13,
+              0,
+              0
+            ],
+            "name": "compiler_rt.o",
+            "sdk": [
+              0,
+              0,
+              0
+            ],
+            "sha256": "dee4ceceee482ce9ef8cbd9faf07b279bf87a62b3f6fb3222287532b8c5dd34e",
+            "uuid": null
+          }
+        ],
+        "path": "bundle/x86_64/libghostty-vt.a",
+        "receipt_sha256": "ce663b3259e064bd2d3de8bccaf895bae5202753b0ac8123306cde5429467464",
+        "reused": false,
+        "sha256": "ce663b3259e064bd2d3de8bccaf895bae5202753b0ac8123306cde5429467464"
+      },
+      "receipt_binary_sha256": {
+        "c-abi": "bce5a63a5d32530e36dd831a1ac6d26dc91457e3730c87bdc011599dc0fe8992",
+        "metadata-fixture": "8cfa9a628087b5bf66d2bec8ae7e5ee37ff6366972214c0eee196c60e567e453"
+      },
+      "requested_target_minimum_macos": [
+        14,
+        0,
+        0
+      ],
+      "target": "x86_64-apple-darwin",
+      "zig_target": "x86_64-macos.14.0"
+    }
+  },
+  "upstream_pinned_inputs": {
+    "notes": "The Linux x86_64 Zig hash is a separate host-specific frozen inventory pin; the producer used the independently rehashed Darwin arm64 Zig archive.",
+    "upstream_inputs_json_sha256": "f96041d8d5b6af22ba1751bd7e76adb91b8331f9de0276c45aacadacd9e6019b",
+    "upstream_inventory_linux_x86_64_zig_host": "Linux-x86_64",
+    "upstream_inventory_linux_x86_64_zig_sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+    "verified_downloads": [
+      {
+        "bytes": 39717617,
+        "commit": "22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+        "independently_streamed_and_rehashed": true,
+        "kind": "Ghostty source archive",
+        "sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+        "url": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be"
+      },
+      {
+        "bytes": 52238004,
+        "independently_streamed_and_rehashed": true,
+        "kind": "Zig Darwin arm64 toolchain archive",
+        "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+        "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+        "version": "0.16.0"
+      }
+    ]
+  }
+}
