@@ -663,7 +663,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         }
         return Self.presentationOptions(for: request)
     }
-    static func presentationOptions(for request: NativeNotificationRequest) -> UNNotificationPresentationOptions {
+    nonisolated static func presentationOptions(for request: NativeNotificationRequest) -> UNNotificationPresentationOptions {
         request.suppressesSystemSound ? [.banner, .list] : [.banner, .list, .sound]
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {

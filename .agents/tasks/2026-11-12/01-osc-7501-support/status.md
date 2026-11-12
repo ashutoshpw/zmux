@@ -4,7 +4,29 @@
 - **Updated:** 2026-11-12
 - **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Integration source committed and pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
 
-## Current overall acceptance
+## Current delivery gates
+
+- Latest pushed source: `7bf0864f9155384684f8fe92be8e9c547fdd9add`.
+  Portable `scripts/check` passed **757/0/7**, static/license/ABI checks passed,
+  source fingerprints matched and unrelated work was preserved. Final fixture
+  and route admission rechecks accepted their repairs.
+- Fresh Ghostty producer [43315098805](https://github.com/ashutoshpw/zmux/actions/runs/43315098805)
+  succeeded at that source: both thin libraries were built without reuse; ARM
+  C ABI and the corrected native metadata fixture passed. Intel was compiled
+  and inspected, not executed. Actual artifact `13988885464` was downloaded;
+  API size/digest and bounded extraction verified. Independent byte review is
+  pending, followed by accepted linkage data and hosted Rust/Session tests.
+- macOS build `43315039604` stopped at strict Swift typechecking: three smoke
+  calls reached a pure presentation-options helper inheriting MainActor.
+  The one-declaration `nonisolated` repair is complete after a Sendable/purity
+  audit. Its portable pre-commit check is running; native compilation must rerun.
+- Foundation `43315039608`: Linux passed; macOS progressed through pre-spawn
+  admission and fixture launch but then timed out during provider attachment.
+  A bounded read-only diagnosis of that later checkpoint/RPC path is underway.
+  No accepted universal app artifact exists for this feature. Earlier failed/candidate runs are not
+  delivery evidence.
+
+## Earlier overall acceptance notes
 
 - Latest stable full `scripts/check` passed: **756 passed, 0 failed, 7 ignored**,
   strict workspace Clippy, formatting, license inventory and native bridge ABI.
@@ -419,3 +441,7 @@ dispatch or app manipulation was performed.
   macOS reproduction was available, and the hosted log does not prove the
   checkpoint latency or a sole root cause. `scripts/check` was not rerun; the
   parent owns the aggregate run. Details: [route-start budget repair](references/route-start-budget-repair.md).
+
+- Pure presentation-helper actor repair: portable pre-commit check passed
+  **757/0/7**, 256.49 seconds, with matching source and preservation hashes.
+  The native compiler must verify the one-declaration change on the next run.
