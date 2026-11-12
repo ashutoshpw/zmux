@@ -1,6 +1,9 @@
 /// This trait is used by the parser to handle extra escape sequences that
 /// don't have an impact on the terminal screen directly.
 pub trait Callbacks {
+    /// This callback is called after the terminal receives the primary reset
+    /// sequence (RIS, `ESC c`).
+    fn ris(&mut self, _: &mut crate::Screen) {}
     /// This callback is called when the terminal requests an audible bell
     /// (typically with `^G`).
     fn audible_bell(&mut self, _: &mut crate::Screen) {}
@@ -64,6 +67,21 @@ pub trait Callbacks {
     /// This callback is called when the terminal receives a OSC sequence
     /// (`\e]`) which is otherwise not implemented.
     fn unhandled_osc(&mut self, _: &mut crate::Screen, _params: &[&[u8]]) {}
+
+    /// This callback receives exact bytes and termination for an OSC sequence.
+    /// `body` excludes the `ESC ]` introducer and terminator. When `truncated`
+    /// is true it is only a bounded prefix and must not be interpreted as a
+    /// complete command. Legacy callbacks still receive the normalized
+    /// parameter form separately.
+    fn unhandled_osc_raw(
+        &mut self,
+        _: &mut crate::Screen,
+        _body: &[u8],
+        _body_length: usize,
+        _truncated: bool,
+        _terminator: crate::OscTerminator,
+    ) {
+    }
 }
 
 impl Callbacks for () {}

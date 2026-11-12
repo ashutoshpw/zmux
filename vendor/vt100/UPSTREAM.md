@@ -11,4 +11,6 @@ terminal screen API. It keeps the upstream parser and screen mutation paths, so
 erase, overwrite, scroll, resize, and alternate-screen behavior continue to be
 owned by vt100. The hyperlink table is bounded; cells whose target ages out of
 the table remain ordinary terminal text and never resolve to a different URL.
-No cmux code or assets are included.
+The local callback wrapper also forwards the raw OSC sequence hook and RIS event
+from the separately documented vendored VTE dependency; normalized callbacks
+remain available to existing consumers. No cmux code or assets are included.

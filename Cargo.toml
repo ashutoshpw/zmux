@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "crates/session-runtime/test-support", "apps/cli", "crates/native-bridge", "crates/desktop-runtime", "crates/remote-runtime", "crates/ghostty-vt"]
-exclude = ["vendor/darwin-libproc", "vendor/vt100"]
+members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "crates/session-runtime/test-support", "apps/cli", "crates/native-bridge", "crates/desktop-runtime", "crates/remote-runtime", "crates/ghostty-vt", "crates/program-status"]
+exclude = ["vendor/darwin-libproc", "vendor/vt100", "vendor/vte"]
 
 [patch.crates-io]
 darwin-libproc = { path = "vendor/darwin-libproc" }
 vt100 = { path = "vendor/vt100" }
+vte = { path = "vendor/vte" }
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +18,7 @@ repository = "https://github.com/ashutoshpw/zmux"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+data-encoding = "=2.11.1"
 thiserror = "2"
 subtle = "=2.6.1"
 uuid = { version = "1", default-features = false, features = ["std", "serde", "v5"] }
@@ -34,6 +36,7 @@ zmux-session-runtime = { path = "crates/session-runtime" }
 zmux-desktop-runtime = { path = "crates/desktop-runtime" }
 zmux-workspace-core = { path = "crates/workspace-core" }
 zmux-remote-runtime = { path = "crates/remote-runtime" }
+zmux-program-status = { path = "crates/program-status" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

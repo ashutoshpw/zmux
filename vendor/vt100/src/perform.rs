@@ -70,7 +70,10 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 b'=' => self.screen.deckpam(),
                 b'>' => self.screen.deckpnm(),
                 b'M' => self.screen.ri(),
-                b'c' => self.screen.ris(),
+                b'c' => {
+                    self.screen.ris();
+                    self.callbacks.ris(&mut self.screen);
+                }
                 b'g' => self.callbacks.visual_bell(&mut self.screen),
                 _ => {
                     self.callbacks.unhandled_escape(
@@ -238,6 +241,22 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 self.callbacks.unhandled_osc(&mut self.screen, params);
             }
         }
+    }
+
+    fn osc_dispatch_raw(
+        &mut self,
+        body: &[u8],
+        body_length: usize,
+        truncated: bool,
+        terminator: crate::OscTerminator,
+    ) {
+        self.callbacks.unhandled_osc_raw(
+            &mut self.screen,
+            body,
+            body_length,
+            truncated,
+            terminator,
+        );
     }
 }
 

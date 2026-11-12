@@ -10,6 +10,7 @@ permissive licenses; retain upstream notices rather than relabeling them as MIT.
 | `serde_json` | Prototype output and bridge JSON | MIT OR Apache-2.0 | <https://github.com/serde-rs/json> |
 | `portable-pty` 0.9.0 | Unix PTY allocation/process launch | MIT | <https://github.com/wezterm/wezterm> |
 | `vt100` 0.16.2 | Headless parser feasibility candidate | MIT | <https://github.com/doy/vt100-rust> |
+| `vte` 0.15.0 | Parser used by vendored `vt100`; local bounded raw-OSC callback supplement | Apache-2.0 OR MIT | <https://github.com/alacritty/vte> |
 | `filedescriptor` 0.8.3 | Safe descriptor duplication/nonblocking I/O/poll | MIT | <https://github.com/wezterm/wezterm> |
 | `socket2` 0.6.3 | Safe Darwin wake-socket SIGPIPE suppression | MIT OR Apache-2.0 | <https://github.com/rust-lang/socket2> |
 | `nix` 0.28.0 | Terminate owned Unix PTY process groups | MIT | <https://github.com/nix-rust/nix> |
@@ -23,8 +24,10 @@ before release; the development inventory is not a completed release license aud
 ## Implementation sources
 
 Workspace/action implementation and behavioral fixtures were authored for Zmux from its
-own plan. No cmux source, tests, assets or implementation patches were imported. Prior
-discussion referenced cmux licensing and PR #1 behavior; this is not a strict clean-room claim.
+own plan. The vendored `vt100` and VTE parser sources retain their upstream notices and are
+documented in `vendor/vt100/UPSTREAM.md` and `vendor/vte/UPSTREAM.md`. No cmux source,
+tests, assets or implementation patches were imported. Prior discussion referenced cmux
+licensing and PR #1 behavior; this is not a strict clean-room claim.
 
 ## Resolved versions and notices
 
@@ -38,8 +41,9 @@ Compatible permissive licensing does not mean every dependency is exclusively MI
 
 Registry API/source review established that portable-pty's Unix backend creates a new
 session/process group; Zmux independently owns nonblocking I/O and group shutdown.
-vt100 0.16.2 has bounded cells/scrollback, but its vte dependency enables a growable OSC
-buffer. The original Zmux adapter therefore rejects oversized control strings explicitly.
+vt100 0.16.2 has bounded cells/scrollback, but its legacy VTE OSC parameter buffer grows
+with input. The Zmux adapter rejects oversized control strings before feeding the parser;
+the local VTE supplement separately bounds retained raw OSC callback data at 16 KiB.
 The parser is an experimental headless candidate, not a finalized native engine choice.
 No upstream source was copied into original Zmux implementation; upstream license texts
 are retained verbatim in the notice artifact.

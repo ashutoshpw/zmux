@@ -1,0 +1,19 @@
+[package]
+name = "zmux-program-status"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded shared OSC 7501 program-status semantics for Zmux terminal owners"
+
+[dependencies]
+data-encoding.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
