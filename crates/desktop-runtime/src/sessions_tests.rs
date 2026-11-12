@@ -305,11 +305,18 @@ fn close_writer(worker: &mut Worker) {
         .unwrap();
 }
 
-fn execute_lifecycle_on_worker(worker: &mut Worker, request: agent_lifecycle::Request) {
+fn execute_lifecycle_on_worker(
+    worker: &mut Worker,
+    request: agent_lifecycle::Request,
+    reply_deadline: Option<Instant>,
+    first_poll_delay: Duration,
+) -> Execution {
     let checkpoint_expected = matches!(
         &request.action,
         agent_lifecycle::Action::ProviderRouteStarted { .. }
     );
+    let checkpoint_should_be_pending =
+        checkpoint_expected && reply_deadline.is_none_or(|deadline| deadline > Instant::now());
     let (sender, receiver) = mpsc::sync_channel(1);
     worker.command(Envelope {
         request: Request {
@@ -320,23 +327,23 @@ fn execute_lifecycle_on_worker(worker: &mut Worker, request: agent_lifecycle::Re
         acknowledgement: Some(sender),
         cancellation: None,
         authorization: None,
-        reply_deadline: None,
+        reply_deadline,
         shared_terminal: None,
     });
-    if checkpoint_expected {
+    if checkpoint_should_be_pending {
         assert!(
             receiver.try_recv().is_err(),
             "route start waits for worker checkpoint"
         );
     }
+    if !first_poll_delay.is_zero() {
+        thread::sleep(first_poll_delay);
+    }
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         worker.poll_program_status_checkpoints();
         match receiver.try_recv() {
-            Ok(execution) => {
-                execution.result.unwrap();
-                return;
-            }
+            Ok(execution) => return execution,
             Err(mpsc::TryRecvError::Disconnected) => panic!("lifecycle acknowledgement closed"),
             Err(mpsc::TryRecvError::Empty) => {}
         }
@@ -359,7 +366,7 @@ fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before
         program: "/bin/sh".into(),
         args: vec![
             "-c".into(),
-            r#"stty -echo; printf '\033]133;A\007'; printf 'ROUTE_READY\n'; IFS= read -r line; printf '\033]7501;id=permission:state=blocked:kind=permission\007'; printf 'ROUTE_REPORT_SENT\n'; IFS= read -r line"#.into(),
+            r#"stty -echo; printf '\033]133;A\007'; printf 'ROUTE_READY\n'; IFS= read -r line; printf '\033]7501;id=before-route:state=blocked:kind=permission\007'; printf 'BEFORE_ROUTE_REPORT_SENT\n'; IFS= read -r line; printf '\033]7501;id=after-route:state=blocked:kind=permission\007'; printf 'ROUTE_REPORT_SENT\n'; IFS= read -r line"#.into(),
         ],
         cwd: None,
         size: Size { rows: 24, cols: 80 },
@@ -410,10 +417,20 @@ fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before
             && snapshot.viewport.program_status.command_epoch.0 == 1
     });
     assert_eq!(current.state, zmux_session_runtime::State::Running);
-    let mut stale_cached = current.as_ref().clone();
-    stale_cached.viewport.program_status.command_epoch = zmux_program_status::CommandEpoch(0);
-    worker.slots.get_mut(&session_id).unwrap().cached = Some(Arc::new(stale_cached));
-
+    let initial_frame = Frame {
+        session_id,
+        process_id: Some(1),
+        starting: false,
+        reconnectable: false,
+        snapshot: Some(Arc::clone(&current)),
+        failure: None,
+    };
+    assert!(
+        worker
+            .program_status
+            .observe(&model, &[initial_frame], Instant::now())
+            .is_empty()
+    );
     let target = agent_lifecycle::Target {
         identity_namespace: model.identity_namespace,
         surface_id: surface.id,
@@ -421,8 +438,145 @@ fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before
         session_id,
     };
     let route_id = Uuid::new_v4();
+    let expired_route_id = Uuid::new_v4();
     let runtime_id = Uuid::new_v4();
     let generation = Uuid::new_v4();
+
+    // Exercise resumed commands at their mutation owner, with actual Session
+    // checkpoint results. No initial checkpoint poll can mask these guards.
+    for (expired, cancelled, drop_reply) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut checkpoint = worker
+            .live_session(session_id)
+            .unwrap()
+            .request_program_status_checkpoint(deadline)
+            .unwrap();
+        let checkpoint = loop {
+            if let Some(result) = checkpoint.try_recv() {
+                break result.unwrap();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "final-admission checkpoint stalled"
+            );
+            thread::sleep(Duration::from_millis(2));
+        };
+        worker.advance_checkpoint_snapshot(session_id, 1, &checkpoint);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let receiver = if drop_reply {
+            drop(receiver);
+            None
+        } else {
+            Some(receiver)
+        };
+        worker.command(Envelope {
+            request: Request {
+                version: 1,
+                request_id: 92,
+                payload: Command::AgentLifecycleCheckpointed {
+                    request: agent_lifecycle::Request {
+                        request_id: Uuid::new_v4(),
+                        action: agent_lifecycle::Action::ProviderRouteStarted {
+                            target,
+                            provider: agent_lifecycle::Provider::CodexLocal,
+                            route_id: Uuid::new_v4(),
+                            runtime_id,
+                            generation,
+                        },
+                    },
+                    checkpoint: Ok(checkpoint),
+                },
+            },
+            acknowledgement: Some(sender),
+            cancellation: Some(Arc::new(AtomicBool::new(cancelled))),
+            authorization: None,
+            reply_deadline: Some(if expired {
+                Instant::now() - Duration::from_millis(1)
+            } else {
+                Instant::now() + Duration::from_secs(2)
+            }),
+            shared_terminal: None,
+        });
+        if let Some(receiver) = receiver {
+            assert!(matches!(
+                receiver
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+                    .result,
+                Err(DesktopError::Timeout)
+            ));
+        }
+    }
+
+    let expired = execute_lifecycle_on_worker(
+        &mut worker,
+        agent_lifecycle::Request {
+            request_id: Uuid::new_v4(),
+            action: agent_lifecycle::Action::ProviderRouteStarted {
+                target,
+                provider: agent_lifecycle::Provider::CodexLocal,
+                route_id: expired_route_id,
+                runtime_id,
+                generation,
+            },
+        },
+        Some(Instant::now() - Duration::from_millis(1)),
+        Duration::ZERO,
+    );
+    assert!(
+        expired.result.is_err(),
+        "an expired caller deadline must not be renewed into route admission"
+    );
+
+    worker
+        .live_session(session_id)
+        .unwrap()
+        .send_input(b"report-before-route\n")
+        .unwrap();
+    let before_route_report = wait_for_live_snapshot(&worker, &|snapshot| {
+        snapshot
+            .viewport
+            .contents
+            .contains("BEFORE_ROUTE_REPORT_SENT")
+            && snapshot
+                .viewport
+                .program_status
+                .transitions
+                .iter()
+                .any(|transition| {
+                    transition.cause == zmux_program_status::TransitionCause::Report
+                        && transition.command_epoch.0 == 1
+                        && transition.after_record.as_ref().is_some_and(|record| {
+                            record.state == zmux_program_status::State::Blocked
+                        })
+                })
+    });
+    let before_route_frame = Frame {
+        session_id,
+        process_id: Some(1),
+        starting: false,
+        reconnectable: false,
+        snapshot: Some(before_route_report),
+        failure: None,
+    };
+    assert_eq!(
+        worker
+            .program_status
+            .observe(&model, &[before_route_frame], Instant::now())
+            .len(),
+        1,
+        "a report after an expired route start remains alertable"
+    );
+    assert_eq!(worker.program_status.alert_cursor(), 1);
+
+    let mut stale_cached = current.as_ref().clone();
+    stale_cached.viewport.program_status.command_epoch = zmux_program_status::CommandEpoch(0);
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(Arc::new(stale_cached));
+
     for action in [
         agent_lifecycle::Action::ProviderRouteStarted {
             target,
@@ -439,19 +593,38 @@ fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before
             generation,
         },
     ] {
-        execute_lifecycle_on_worker(
-            &mut worker,
-            agent_lifecycle::Request {
-                request_id: Uuid::new_v4(),
-                action,
-            },
-        );
+        let (reply_deadline, first_poll_delay) = match action {
+            agent_lifecycle::Action::ProviderRouteStarted { .. } => (
+                Some(Instant::now() + Duration::from_secs(2)),
+                Duration::from_millis(225),
+            ),
+            _ => (None, Duration::ZERO),
+        };
+        let request = agent_lifecycle::Request {
+            request_id: Uuid::new_v4(),
+            action,
+        };
+        let started = Instant::now();
+        let execution =
+            execute_lifecycle_on_worker(&mut worker, request, reply_deadline, first_poll_delay);
+        if reply_deadline.is_some() {
+            assert!(
+                started.elapsed() >= Duration::from_millis(200),
+                "real Desktop route admission should complete after the 150 ms lifecycle cap"
+            );
+            assert!(
+                execution.result.is_ok(),
+                "the actual Session checkpoint should still admit the exact route epoch"
+            );
+        } else {
+            execution.result.unwrap();
+        }
     }
 
     worker
         .live_session(session_id)
         .unwrap()
-        .send_input(b"run-provider\n")
+        .send_input(b"report-after-route\n")
         .unwrap();
     let report = wait_for_live_snapshot(&worker, &|snapshot| {
         snapshot.viewport.contents.contains("ROUTE_REPORT_SENT")
@@ -482,7 +655,7 @@ fn provider_route_admission_uses_live_prompt_epoch_and_survives_fast_exit_before
             .observe(&model, &[frame], Instant::now())
             .is_empty()
     );
-    assert_eq!(worker.program_status.alert_cursor(), 0);
+    assert_eq!(worker.program_status.alert_cursor(), 1);
 
     worker
         .slots

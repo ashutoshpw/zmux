@@ -68,7 +68,8 @@ def accept(root, target, candidate_set=HISTORICAL):
             if not isinstance(source_pin, dict) or source_pin.get("path") != source_name:
                 raise Rejected("versioned linkage candidate source path differs")
             source_manifest, source_document = load_source_manifest(candidate_set)
-            validate_source_candidate_files(candidate_set, source_document)
+            fixture_source_sha256 = validate_source_candidate_files(
+                candidate_set, source_document)
             inputs.extend(str(path.resolve()) for path in (
                 source_manifest,
                 REPO / "tools/terminal-engine-artifacts/candidate.json",
@@ -82,7 +83,8 @@ def accept(root, target, candidate_set=HISTORICAL):
                 candidate_set, manifest, receipt,
                 source_manifest=source_document,
                 source_manifest_sha256=digest(source_bytes),
-                producer_sha256=digest(receipt_bytes))
+                producer_sha256=digest(receipt_bytes),
+                fixture_source_sha256=fixture_source_sha256)
             source_manifest_sha256 = digest(source_bytes)
         for name, expected in receipt["headers_sha256"].items():
             check(bundle, name, expected)
@@ -96,7 +98,8 @@ def accept(root, target, candidate_set=HISTORICAL):
                 source_manifest=source_document,
                 source_manifest_sha256=source_manifest_sha256,
                 target=target, library_sha256=digest(library_bytes),
-                producer_sha256=digest(receipt_bytes))
+                producer_sha256=digest(receipt_bytes),
+                fixture_source_sha256=fixture_source_sha256)
         inspect_darwin_archive(library, architecture)
         include_root = bundle
     else:

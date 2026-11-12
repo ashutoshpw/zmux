@@ -1,0 +1,126 @@
+--- a/metadata-owner.rs
++++ b/metadata-owner.rs
+@@ -231,6 +231,12 @@
+                 self.notice(777, &value[..split], &value[split + 1..])?;
+             }
+             1337 if record.subcommand == 9 => {} // compatibility cwd policy
++            133 if matches!(record.subcommand, 1 | 2)
++                && record.terminator == 0
++                && bytes.is_empty() => {} // Prompt and RIS markers preserve legacy metadata.
++            7501 if record.subcommand == 0
++                && matches!(record.terminator, 7 | 27)
++                && !bytes.is_empty() => {} // The Program Status owner parses the raw report.
+             _ => return Err(()),
+         }
+         Ok(())
+@@ -432,11 +438,25 @@
+     o.feed(b"\x1b]9;body;extra\x07\x1b]777;notify;title;body;extra\x07\x07\x1b[6n\x1bc")
+         .unwrap();
+     assert_eq!(
++        o.last.events[..5]
++            .iter()
++            .map(|e| e.kind)
++            .collect::<Vec<_>>(),
++        [4, 4, 1, 2, 3]
++    );
++    assert_eq!(
+         o.last.events[..o.last.frame.event_length]
+             .iter()
+             .map(|e| e.kind)
+             .collect::<Vec<_>>(),
+-        [4, 4, 1, 2, 3]
++        [4, 4, 1, 2, 3, 4],
++        "RIS metadata must follow the legacy notice, bell, reply and reset events"
++    );
++    assert_eq!(
++        (o.records[2].source, o.records[2].subcommand, o.records[2].status,
++         o.records[2].terminator, o.records[2].length),
++        (133, 2, 0, 0, 0),
++        "RIS must retain its explicit metadata callback"
+     );
+     assert_eq!(
+         o.state.notices[..3]
+@@ -454,6 +474,59 @@
+     assert_eq!(o.state.title(), "one;two");
+     assert_eq!(o.state.cwd(), Some("/a b"));
+     assert_eq!(o.last.replies(), b"\x1b[1;1R");
++    assert_eq!(o.state.count, 3, "RIS must preserve the existing notice ring");
++    assert_eq!(o.state.next, 3, "RIS metadata must not allocate a notice sequence");
++
++    let notice_snapshot = |state: &MetaState| {
++        (0..state.count)
++            .map(|i| {
++                let notice = state.notices[i];
++                let (title, body) = state.notice_text(i);
++                (notice.sequence, notice.source, title.to_owned(), body.to_owned())
++            })
++            .collect::<Vec<_>>()
++    };
++    let title_before = o.state.title().to_owned();
++    let cwd_before = o.state.cwd().map(str::to_owned);
++    let notices_before = notice_snapshot(&o.state);
++    let sequence_before = o.state.next;
++    let bel_payload = b"state=working:id=bel";
++    let st_payload = b"state=blocked:id=st";
++    o.feed(b"\x1b]133;A\x07\x1b]7501;state=working:id=bel\x07\x1b]7501;state=blocked:id=st\x1b\\\x1bc")
++        .unwrap();
++    assert_eq!(
++        o.last.events[..o.last.frame.event_length]
++            .iter()
++            .map(|event| (event.kind, event.offset, event.length))
++            .collect::<Vec<_>>(),
++        [(4, 0, 0), (4, 1, 0), (4, 2, 0), (3, 0, 0), (4, 3, 0)],
++        "mixed prompt, BEL/ST reports and RIS must retain callback order and association"
++    );
++    assert_eq!(
++        o.records[..o.count]
++            .iter()
++            .map(|record| (record.source, record.subcommand, record.status,
++                           record.terminator, record.offset, record.length))
++            .collect::<Vec<_>>(),
++        [(133, 1, 0, 0, 0, 0),
++         (7501, 0, 0, 7, 0, bel_payload.len() as u32),
++         (7501, 0, 0, 27, bel_payload.len() as u32, st_payload.len() as u32),
++         (133, 2, 0, 0, (bel_payload.len() + st_payload.len()) as u32, 0)],
++        "raw source, status, terminators and payload ranges must remain exact"
++    );
++    for (index, expected) in [(1, bel_payload.as_slice()), (2, st_payload.as_slice())] {
++        let record = o.records[index];
++        assert_eq!(
++            &o.bytes[record.offset as usize..(record.offset + record.length) as usize],
++            expected,
++            "BEL and ST payloads must remain byte-for-byte associated with their records"
++        );
++    }
++    assert_eq!(o.state.title(), title_before);
++    assert_eq!(o.state.cwd().as_deref(), cwd_before.as_deref());
++    assert_eq!(notice_snapshot(&o.state), notices_before);
++    assert_eq!(o.state.next, sequence_before);
++
+     o.feed(b"\x1b]0;zero\x07\x1b]2;one;two\x07").unwrap();
+     assert_eq!(
+         o.records[..o.count]
+@@ -677,5 +750,23 @@
+         o.feed(b"\x1b]2;cycle\x07\x1b]9;body\x07\x1bc").unwrap();
+         o.raw.close();
+     }
++
++    let mut strict = MetaState::new().unwrap();
++    for (record, bytes) in [
++        (MetaRecord { source: 134, ..MetaRecord::default() }, &b""[..]),
++        (MetaRecord { source: 133, subcommand: 3, ..MetaRecord::default() }, &b""[..]),
++        (MetaRecord { source: 7501, subcommand: 1, terminator: 7, ..MetaRecord::default() }, &b"x"[..]),
++        (MetaRecord { source: 7501, terminator: 7, ..MetaRecord::default() }, &b""[..]),
++    ] {
++        assert!(strict.apply(record, bytes).is_err(), "unknown or malformed metadata must reject");
++    }
++
++    let mut unknown_event = MetadataOwner::new();
++    unknown_event.candidate.frame.operation_id = 1;
++    unknown_event.candidate.frame.event_length = 1;
++    unknown_event.candidate.events[0] = Event { kind: 99, offset: 0, length: 0 };
++    assert!(unknown_event.validate().is_err(), "unknown event kinds must reject");
++    unknown_event.raw.close();
++
+     println!("metadata_success=true");
+ }

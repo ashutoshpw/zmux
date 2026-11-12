@@ -351,7 +351,8 @@ fn automatic_launch(
         ProviderKind::Codex => LifecycleProvider::CodexLocal,
         ProviderKind::OpenCode => LifecycleProvider::OpenCodeLocal,
     };
-    if submit_provider_route(
+    let route_started_at = Instant::now();
+    if let Err(error) = submit_provider_route(
         &options,
         &route,
         lifecycle_provider,
@@ -359,9 +360,7 @@ fn automatic_launch(
         runtime,
         generation,
         ProviderRouteSignal::Started,
-    )
-    .is_err()
-    {
+    ) {
         // A timed out start may still be queued in the executor. Submit its
         // exact inverse before falling back so a late admission cannot shadow
         // OSC alerts for this terminal command.
@@ -377,11 +376,16 @@ fn automatic_launch(
         stop_listener.store(true, Ordering::Release);
         let _ = listener_thread.join();
         let _ = fs::remove_dir_all(&runtime_dir);
-        return launch_untracked(
-            provider,
-            args,
-            "Desktop did not admit the pending provider route",
+        let failure_class = if error.0 == "desktop did not accept pending provider route" {
+            "desktop_rejected_route"
+        } else {
+            "control_request_failed"
+        };
+        let reason = format!(
+            "Desktop did not admit the pending provider route; route-start {failure_class} after {} ms",
+            route_started_at.elapsed().as_millis()
         );
+        return launch_untracked(provider, args, &reason);
     }
 
     // The provider spawn is attempted once. If it returns a child, every later
@@ -907,14 +911,19 @@ fn submit_provider_route(
             generation,
         },
     };
-    let response = lifecycle_operation(
-        options,
-        Instant::now() + options.timeout.min(LIFECYCLE_BUDGET),
-        LifecycleRequest {
-            request_id: Uuid::new_v4(),
-            action,
-        },
-    )?;
+    let deadline = Instant::now() + options.timeout.min(EVENT_BUDGET);
+    let request = LifecycleRequest {
+        request_id: Uuid::new_v4(),
+        action,
+    };
+    let response = match signal {
+        ProviderRouteSignal::Started => {
+            lifecycle_operation_with_deadline(options, deadline, request)?
+        }
+        ProviderRouteSignal::Ended | ProviderRouteSignal::Cancelled => {
+            lifecycle_operation(options, deadline, request)?
+        }
+    };
     if response["accepted"] != true {
         return Err(CliError(
             "desktop did not accept pending provider route".into(),
@@ -1072,6 +1081,86 @@ mod tests {
         assert_eq!(actions[0]["action"], "provider_route_started");
         assert_eq!(actions[1]["action"], "provider_route_ended");
         assert_eq!(actions[2]["action"], "provider_route_cancelled");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn route_start_transport_budget_exceeds_the_lifecycle_cap_but_cleanup_does_not() {
+        // This deliberately delayed local-control peer proves only client transport
+        // budgeting; its accepted response is not Desktop route-admission evidence.
+        let directory = Path::new("/tmp").canonicalize().unwrap().join(format!(
+            "zprovider-route-budget-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let socket = directory.join("control.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let response_delay = Duration::from_millis(250);
+        let server = thread::spawn(move || {
+            for expected in [
+                "provider_route_started",
+                "provider_route_ended",
+                "provider_route_cancelled",
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+                stream.read_exact(&mut bytes).unwrap();
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(request["command"]["request"]["action"]["action"], expected);
+                thread::sleep(response_delay);
+                let response = json!({
+                    "version": CONTROL_VERSION,
+                    "request_id": request["request_id"],
+                    "ok": true,
+                    "result": {"accepted": true}
+                });
+                let response = serde_json::to_vec(&response).unwrap();
+                let _ = stream.write_all(&(response.len() as u32).to_be_bytes());
+                let _ = stream.write_all(&response);
+            }
+        });
+        let options = ClientOptions {
+            socket,
+            timeout: Duration::from_secs(1),
+            password: None,
+        };
+        let route = Route {
+            namespace: Uuid::new_v4(),
+            surface: Uuid::new_v4(),
+            surface_id: SurfaceId(9),
+            session: 11,
+            terminal: ProcessIdentity {
+                pid: 13,
+                uid: 17,
+                parent_pid: 19,
+                start: [23, 29],
+                boot: "fixture".into(),
+                executable: PathBuf::from("/bin/sh"),
+            },
+        };
+        for signal in [
+            ProviderRouteSignal::Started,
+            ProviderRouteSignal::Ended,
+            ProviderRouteSignal::Cancelled,
+        ] {
+            let result = submit_provider_route(
+                &options,
+                &route,
+                LifecycleProvider::CodexLocal,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                signal,
+            );
+            assert_eq!(
+                result.is_ok(),
+                matches!(signal, ProviderRouteSignal::Started),
+                "only Started gets a transport budget longer than the 250 ms response delay"
+            );
+        }
+        server.join().unwrap();
         fs::remove_dir_all(directory).unwrap();
     }
 

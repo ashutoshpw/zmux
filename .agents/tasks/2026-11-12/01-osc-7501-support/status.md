@@ -374,9 +374,48 @@ dispatch or app manipulation was performed.
 - Foundation Linux passed at `3b38518`. Foundation macOS failed the real local
   Codex route admission; later provider-hook failures were mutex-poison cascades.
   Log `/tmp/zmux-osc7501-foundation-macos-failure.log`. A bounded owner diagnosis
-  is in progress; no Mac acceptance is inferred from the Linux pass.
+  is recorded in [macOS route admission diagnosis](references/macos-route-admission-diagnosis.md).
+  It identifies the 150 ms CLI route-start cap versus the asynchronous 2 s
+  Session checkpoint as the strongest plausible cause; the hosted log does not
+  prove the exact checkpoint latency or sole root cause. No Mac acceptance is
+  inferred from the Linux pass.
 - Ghostty producer `43300002338` failed its old metadata fixture at RIS metadata,
   after fresh ARM library/C ABI compilation and inspection. Failed diagnostic
   artifact `13980787888` was downloaded and API SHA-256/size verified. It is not
   an accepted library artifact; exact failure and versioned harness repair are
   being investigated while historical fixture pins remain unchanged.
+
+## Pre-spawn provider route-start deadline repair
+
+- Only local `ProviderRouteStarted` now uses its absolute CLI deadline, capped
+  by the existing 2.7 second `EVENT_BUDGET`. Ordinary lifecycle operations
+  remain capped at 150 ms; provider event sends remain at 100 ms. The CLI
+  carries one absolute deadline through control connect, writes and response
+  reads.
+- Desktop stamps the authorized route command deadline before queueing its
+  envelope. The real Session checkpoint is bounded by the earlier of its
+  existing 2 second cap and that command deadline minus a 250 ms response
+  margin. The poller cancels and fails closed at that cutoff or on the existing
+  caller cancellation flag. Tracked provider spawn still requires an accepted
+  `Started` response; the exact `Cancelled` inverse and one fallback remain.
+- A sanitized fallback reason now includes elapsed milliseconds and a coarse
+  control-request outcome class, without raw IPC errors, paths, payloads or
+  provider data.
+- Red/green controls: the CLI delayed-response test fails when Started is
+  temporarily returned to the 150 ms helper. The real-PTY Desktop test fails
+  when deadline propagation and expiry rejection are temporarily removed.
+  Both controls were restored and the final focused tests passed.
+- Validation: CLI provider unit tests 3/3; real-PTY Desktop route admission
+  1/1; `provider_hooks` integration suite 15 passed, 2 ignored, 0 failed
+  (including the exact local Codex Desktop fixture and one-launch fallback);
+  strict all-target Clippy for `zmux` and `zmux-desktop-runtime`; workspace
+  formatting and whitespace checks. The integration suite preceded only the
+  final sanitized diagnostic-text change; final source and test targets then
+  compiled under Clippy.
+- The real-PTY regression delays Desktop polling 225 ms and verifies exact
+  command-epoch alert arbitration from the actual Session checkpoint. It does
+  not force the Session worker itself to spend more than 150 ms completing the
+  checkpoint. The CLI socket test proves transport budgeting only. No native
+  macOS reproduction was available, and the hosted log does not prove the
+  checkpoint latency or a sole root cause. `scripts/check` was not rerun; the
+  parent owns the aggregate run. Details: [route-start budget repair](references/route-start-budget-repair.md).

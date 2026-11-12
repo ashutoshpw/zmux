@@ -22,3 +22,16 @@ Earlier failed full-run receipts were retained separately; this pass includes
 the SSH bootstrap, native-frame fixture, checkpoint, route-retirement and
 graceful-close repairs. Final scoped review and source commit attribution are
 recorded in task status when completed.
+
+## Final hosted-repair source validation
+
+The combined route-budget, final-admission rollback, Swift receipt casts and
+versioned fixture source set passed `scripts/check`: **757 passed, 0 failed,
+7 ignored**, 277.16 seconds. All strict static, license and ABI checks passed.
+The before/after source fingerprints and unrelated preservation hashes match.
+The final fixture Python suite ran 47 total: 46 passed, 1 Apple-linker skip;
+its staged Rust metadata compile and recipe preflight passed. Native compiler,
+producer, actual callback execution and app acceptance remain hosted gates.
+The detailed latest fingerprint receipt is `/tmp/zmux-osc7501-final-check.json`;
+previous successful source receipts are archived as `check-round4` through
+`check-round7`. Final source commit attribution follows in task status.

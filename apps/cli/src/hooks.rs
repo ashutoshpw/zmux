@@ -1184,13 +1184,22 @@ fn lifecycle_operation(
     lifecycle_request: LifecycleRequest,
 ) -> Result<Value, CliError> {
     let deadline = deadline.min(Instant::now() + LIFECYCLE_BUDGET);
+    lifecycle_operation_with_deadline(options, deadline, lifecycle_request)
+}
+
+fn lifecycle_operation_with_deadline(
+    options: &ClientOptions,
+    deadline: Instant,
+    lifecycle_request: LifecycleRequest,
+) -> Result<Value, CliError> {
     let budget = ClientOptions {
         socket: options.socket.clone(),
         password: options.password.clone(),
         timeout: socket_budget(deadline)?,
     };
-    response_result(request(
+    response_result(request_until(
         &budget,
+        deadline,
         ControlCommand::AgentLifecycle {
             request: lifecycle_request,
         },

@@ -2,17 +2,22 @@
 
 import copy
 import importlib.util
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from candidate_sets import (HISTORICAL, VERSIONED_7501, LINKAGE_MANIFESTS,
+                            METADATA_FIXTURE_ENTRYPOINT, METADATA_FIXTURE_INTEGRATED,
+                            METADATA_FIXTURE_OWNER,
                             SOURCE_MANIFESTS, canonical_digest,
+                            load_source_manifest,
                             source_manifest_repo_path,
                             validate_source_candidate_files,
                             validate_source_manifest,
                             validate_versioned_linkage)
-from verify import HERE, Rejected, digest
+from verify import HERE, Rejected, digest, document
 
 BUILD_SPEC = importlib.util.spec_from_file_location(
     "terminal_engine_build", HERE / "build-darwin.py")
@@ -34,8 +39,31 @@ class CandidateSetChecks(unittest.TestCase):
             data = f"patch-{index}".encode()
             path.write_bytes(data)
             inputs[name] = digest(data)
+        fixture_patch = "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch"
+        fixture_patch_data = b"versioned metadata owner fixture patch"
+        fixture_patch_path = root / fixture_patch
+        fixture_patch_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture_patch_path.write_bytes(fixture_patch_data)
+        inputs[fixture_patch] = digest(fixture_patch_data)
+
+        fixture_source_data = {
+            METADATA_FIXTURE_ENTRYPOINT: b"metadata entrypoint",
+            METADATA_FIXTURE_INTEGRATED: b"integrated fixture source",
+            METADATA_FIXTURE_OWNER: b"legacy owner source",
+        }
+        baseline = {
+            "schema_version": 1,
+            "repository_inputs_sha256": {
+                name: digest(data) for name, data in fixture_source_data.items()
+            },
+        }
+        baseline_bytes = (json.dumps(baseline, indent=2) + "\n").encode()
+        for name, data in fixture_source_data.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         for name, data in (
-            ("tools/terminal-engine-artifacts/candidate.json", b"baseline"),
+            ("tools/terminal-engine-artifacts/candidate.json", baseline_bytes),
             ("tools/terminal-engine-artifacts/upstream-inputs.json", b"upstream"),
             ("tools/terminal-engine-artifacts/darwin-recipe.json", b"recipe"),
         ):
@@ -46,11 +74,17 @@ class CandidateSetChecks(unittest.TestCase):
             "schema_version": 1,
             "candidate_kind": "source",
             "candidate_set": VERSIONED_7501,
-            "base_candidate_sha256": digest(b"baseline"),
+            "base_candidate_sha256": digest(baseline_bytes),
             "upstream_inputs_sha256": digest(b"upstream"),
             "recipe_sha256": digest(b"recipe"),
             "source_inputs_sha256": inputs,
             "patches": [{"path": name, "sha256": inputs[name]} for name in patches],
+            "fixture_patches": [{
+                "path": fixture_patch,
+                "sha256": inputs[fixture_patch],
+                "target": METADATA_FIXTURE_OWNER,
+                "base_sha256": baseline["repository_inputs_sha256"][METADATA_FIXTURE_OWNER],
+            }],
             "post_patch_headers_sha256": {
                 "include/ghostty/vt/zmux_metadata.h": digest(b"header"),
             },
@@ -91,16 +125,87 @@ class CandidateSetChecks(unittest.TestCase):
             validate_source_candidate_files(VERSIONED_7501, manifest, root)
 
             changed = root / "tools/terminal-feasibility/metadata.patch"
+            original_patch = changed.read_bytes()
             changed.write_bytes(b"different patch")
             with self.assertRaisesRegex(Rejected, "sha256 mismatch"):
                 validate_source_candidate_files(VERSIONED_7501, manifest, root)
+            changed.write_bytes(original_patch)
 
-    def test_versioned_schema_requires_integer_one_and_headers_are_canonical_h_paths(self):
+            integrated = root / METADATA_FIXTURE_INTEGRATED
+            original_integrated = integrated.read_bytes()
+            integrated.write_bytes(original_integrated + b"drift")
+            with self.assertRaisesRegex(Rejected, "sha256 mismatch"):
+                validate_source_candidate_files(VERSIONED_7501, manifest, root)
+
+    def test_fixture_patch_order_base_and_source_digest_are_pinned(self):
+        with tempfile.TemporaryDirectory(prefix="zmux-candidate-fixture-") as temporary:
+            root = Path(temporary)
+            manifest = self.source_manifest(root)
+            validate_source_candidate_files(VERSIONED_7501, manifest, root)
+
+            extra = copy.deepcopy(manifest)
+            extra_path = "tools/terminal-feasibility/extra-owner-fixture.patch"
+            extra_sha = digest(b"unexpected fixture patch")
+            extra["source_inputs_sha256"][extra_path] = extra_sha
+            extra["fixture_patches"].append({
+                "path": extra_path,
+                "sha256": extra_sha,
+                "target": METADATA_FIXTURE_OWNER,
+                "base_sha256": extra["fixture_patches"][0]["base_sha256"],
+            })
+            with self.assertRaisesRegex(Rejected, "fixture patch order"):
+                validate_source_manifest(VERSIONED_7501, extra)
+
+            wrong_base = copy.deepcopy(manifest)
+            wrong_base["fixture_patches"][0]["base_sha256"] = "f" * 64
+            with self.assertRaisesRegex(Rejected, "historical owner pin"):
+                validate_source_candidate_files(VERSIONED_7501, wrong_base, root)
+
+            patch_path = root / manifest["fixture_patches"][0]["path"]
+            patch_path.write_bytes(b"modified fixture patch")
+            with self.assertRaisesRegex(Rejected, "sha256 mismatch"):
+                validate_source_candidate_files(VERSIONED_7501, manifest, root)
+
+    def test_versioned_fixture_staging_applies_pinned_patch_and_records_exact_output(self):
+        _, manifest = load_source_manifest(VERSIONED_7501)
+        candidate = document(HERE / "candidate.json")
+
+        def run(command, _label, timeout=60, cwd=None):
+            return subprocess.run(command, cwd=cwd, check=True, text=True,
+                                  capture_output=True, timeout=timeout).stdout
+
+        with tempfile.TemporaryDirectory(prefix="zmux-candidate-fixture-stage-") as temporary:
+            entrypoint, receipt = build_darwin.stage_metadata_fixture(
+                Path(temporary), candidate, manifest, run)
+            staged = entrypoint.parent
+            owner_path = staged / Path(METADATA_FIXTURE_OWNER).name
+            self.assertEqual(entrypoint.name, Path(METADATA_FIXTURE_ENTRYPOINT).name)
+            self.assertTrue((staged / Path(METADATA_FIXTURE_INTEGRATED).name).is_file())
+            self.assertTrue(owner_path.is_file())
+            self.assertEqual(receipt["base_owner_sha256"],
+                             manifest["fixture_patches"][0]["base_sha256"])
+            self.assertEqual(receipt["patches"], [
+                {"path": patch["path"], "sha256": patch["sha256"]}
+                for patch in manifest["fixture_patches"]
+            ])
+            self.assertEqual(receipt["entrypoint_sha256"],
+                             candidate["repository_inputs_sha256"][METADATA_FIXTURE_ENTRYPOINT])
+            self.assertEqual(receipt["integrated_sha256"],
+                             candidate["repository_inputs_sha256"][METADATA_FIXTURE_INTEGRATED])
+            self.assertEqual(receipt["patched_owner_sha256"], digest(owner_path.read_bytes()))
+            self.assertNotEqual(receipt["patched_owner_sha256"], receipt["base_owner_sha256"])
+
+    def test_versioned_source_schema_one_is_exact_and_headers_are_canonical_h_paths(self):
         with tempfile.TemporaryDirectory(prefix="zmux-candidate-source-") as temporary:
-            manifest = self.source_manifest(Path(temporary))
-            manifest["schema_version"] = True
-            with self.assertRaisesRegex(Rejected, "schema"):
-                validate_source_manifest(VERSIONED_7501, manifest)
+            root = Path(temporary)
+            manifest = self.source_manifest(root)
+            validate_source_manifest(VERSIONED_7501, manifest)
+            for version in (True, 2, 3):
+                with self.subTest(version=version):
+                    invalid_version = copy.deepcopy(manifest)
+                    invalid_version["schema_version"] = version
+                    with self.assertRaisesRegex(Rejected, "schema"):
+                        validate_source_manifest(VERSIONED_7501, invalid_version)
 
             for path in (
                 "include/../outside.h",
@@ -110,7 +215,7 @@ class CandidateSetChecks(unittest.TestCase):
                 "include\\ghostty\\program_status.h",
             ):
                 with self.subTest(path=path):
-                    invalid = copy.deepcopy(self.source_manifest(Path(temporary)))
+                    invalid = copy.deepcopy(self.source_manifest(root))
                     invalid["post_patch_headers_sha256"] = {path: digest(b"header")}
                     with self.assertRaisesRegex(Rejected, "header pin"):
                         validate_source_manifest(VERSIONED_7501, invalid)
@@ -149,6 +254,11 @@ class CandidateSetChecks(unittest.TestCase):
             "headers_sha256": headers,
         }
         recipe_hash = canonical_digest(library_recipe)
+        fixture_source_sha256 = {
+            METADATA_FIXTURE_ENTRYPOINT: digest(b"metadata entrypoint"),
+            METADATA_FIXTURE_INTEGRATED: digest(b"integrated fixture source"),
+            METADATA_FIXTURE_OWNER: source_manifest["fixture_patches"][0]["base_sha256"],
+        }
         source_pin = {
             "candidate_set": VERSIONED_7501,
             "path": source_manifest_repo_path(VERSIONED_7501),
@@ -172,8 +282,22 @@ class CandidateSetChecks(unittest.TestCase):
             "library_recipe": library_recipe,
             "library_recipe_sha256": recipe_hash,
             "headers_sha256": headers,
+            "source_sha256": copy.deepcopy(fixture_source_sha256),
+            "metadata_fixture": {
+                "entrypoint_path": METADATA_FIXTURE_ENTRYPOINT,
+                "entrypoint_sha256": fixture_source_sha256[METADATA_FIXTURE_ENTRYPOINT],
+                "integrated_sha256": fixture_source_sha256[METADATA_FIXTURE_INTEGRATED],
+                "owner_path": METADATA_FIXTURE_OWNER,
+                "base_owner_sha256": source_manifest["fixture_patches"][0]["base_sha256"],
+                "patches": [{
+                    "path": patch["path"],
+                    "sha256": patch["sha256"],
+                } for patch in source_manifest["fixture_patches"]],
+                "patched_owner_sha256": digest(b"patched owner fixture"),
+            },
         }
-        return manifest, receipt, source_manifest, source_pin["sha256"], receipt_hash, library_hash
+        return (manifest, receipt, source_manifest, source_pin["sha256"], receipt_hash,
+                library_hash, fixture_source_sha256)
 
     def test_canonical_recipe_digest_matches_producer_json_encoding(self):
         self.assertEqual(
@@ -183,7 +307,7 @@ class CandidateSetChecks(unittest.TestCase):
 
     def test_linkage_candidate_rejects_wrong_source_recipe_receipt_and_library(self):
         target = "aarch64-apple-darwin"
-        manifest, receipt, source_manifest, source_sha, receipt_sha, library_sha = self.linkage_fixture()
+        manifest, receipt, source_manifest, source_sha, receipt_sha, library_sha, _ = self.linkage_fixture()
         validate_versioned_linkage(
             VERSIONED_7501, manifest, receipt,
             source_manifest=source_manifest,
@@ -215,7 +339,7 @@ class CandidateSetChecks(unittest.TestCase):
                 )
 
     def test_linkage_recomputes_full_recipe_digest_and_binds_header_inventory(self):
-        manifest, receipt, source_manifest, source_sha, receipt_sha, _ = self.linkage_fixture()
+        manifest, receipt, source_manifest, source_sha, receipt_sha, _, _ = self.linkage_fixture()
         # Every producer recipe component is covered, including siblings of
         # `recipe`; hashing only its targets must not admit changed inputs.
         for component, field, changed_value in (
@@ -246,6 +370,43 @@ class CandidateSetChecks(unittest.TestCase):
                 source_manifest_sha256=source_sha,
                 producer_sha256=receipt_sha,
             )
+
+    def test_linkage_binds_versioned_fixture_patch_to_captured_owner_and_receipt(self):
+        manifest, receipt, source_manifest, source_sha, receipt_sha, library_sha, fixture_source_sha256 = self.linkage_fixture()
+        validate_versioned_linkage(
+            VERSIONED_7501, manifest, receipt,
+            source_manifest=source_manifest,
+            source_manifest_sha256=source_sha,
+            target="aarch64-apple-darwin", library_sha256=library_sha,
+            producer_sha256=receipt_sha, fixture_source_sha256=fixture_source_sha256,
+        )
+
+        corruptions = (
+            ("missing fixture record", lambda changed: changed.pop("metadata_fixture")),
+            ("wrong owner base", lambda changed: changed["metadata_fixture"].update(
+                base_owner_sha256="0" * 64)),
+            ("wrong fixture patch", lambda changed: changed["metadata_fixture"]["patches"][0].update(
+                sha256="1" * 64)),
+            ("missing staged digest", lambda changed: changed["metadata_fixture"].update(
+                patched_owner_sha256="invalid")),
+            ("uncaptured entrypoint", lambda changed: changed["source_sha256"].update(
+                {METADATA_FIXTURE_ENTRYPOINT: "2" * 64})),
+            ("fixture source outside historical pin", lambda changed: (
+                changed["metadata_fixture"].update(entrypoint_sha256="3" * 64),
+                changed["source_sha256"].update({METADATA_FIXTURE_ENTRYPOINT: "3" * 64}))),
+        )
+        for label, corrupt in corruptions:
+            with self.subTest(contract=label):
+                changed = copy.deepcopy(receipt)
+                corrupt(changed)
+                with self.assertRaises(Rejected):
+                    validate_versioned_linkage(
+                        VERSIONED_7501, manifest, changed,
+                        source_manifest=source_manifest,
+                        source_manifest_sha256=source_sha,
+                        producer_sha256=receipt_sha,
+                        fixture_source_sha256=fixture_source_sha256,
+                    )
 
 
 if __name__ == "__main__":

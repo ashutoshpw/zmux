@@ -8,7 +8,8 @@
   "source_inputs_sha256": {
     "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02",
     "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
-    "tools/terminal-feasibility/program-status-v0.4.patch": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+    "tools/terminal-feasibility/program-status-v0.4.patch": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925",
+    "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch": "1aeaedaf7004dbc2af5ff618d2c3c566f12ece2515c8a29d127b3e039a181e33"
   },
   "patches": [
     {
@@ -22,6 +23,14 @@
     {
       "path": "tools/terminal-feasibility/program-status-v0.4.patch",
       "sha256": "f2ea5e25d0f9015c4118ef864ab8c6c85f64e7285a5f06cad8321516995f4925"
+    }
+  ],
+  "fixture_patches": [
+    {
+      "path": "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch",
+      "sha256": "1aeaedaf7004dbc2af5ff618d2c3c566f12ece2515c8a29d127b3e039a181e33",
+      "target": "tools/terminal-feasibility/metadata-owner.rs",
+      "base_sha256": "8abf975e8737f093062452f71b006dd5f39927cdfd3402a133026176e4c395d1"
     }
   ],
   "post_patch_headers_sha256": {

@@ -42,7 +42,21 @@ class RetainedLinkageChecks(unittest.TestCase):
         upstream_path = inventory / "upstream-inputs.json"
         recipe_path = inventory / "darwin-recipe.json"
         baseline_path.parent.mkdir(parents=True, exist_ok=True)
-        baseline_path.write_bytes(b'{"schema_version":1}\n')
+        fixture_source_data = {
+            candidate_sets.METADATA_FIXTURE_ENTRYPOINT: b"metadata entrypoint fixture\n",
+            candidate_sets.METADATA_FIXTURE_INTEGRATED: b"integrated fixture source\n",
+            candidate_sets.METADATA_FIXTURE_OWNER: b"legacy metadata owner\n",
+        }
+        for name, data in fixture_source_data.items():
+            path = repository / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.write_json(baseline_path, {
+            "schema_version": 1,
+            "repository_inputs_sha256": {
+                name: digest(data) for name, data in fixture_source_data.items()
+            },
+        })
         upstream_path.write_bytes(b'{"schema_version":1}\n')
         recipe = {
             "schema_version": 1,
@@ -58,8 +72,10 @@ class RetainedLinkageChecks(unittest.TestCase):
             "tools/terminal-feasibility/metadata.patch",
             "tools/terminal-feasibility/program-status-v0.4.patch",
         ]
+        fixture_patch_path = "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch"
         source_inputs = {}
-        for name in patch_paths + ["tools/terminal-feasibility/program-status-consumer.h"]:
+        for name in patch_paths + [fixture_patch_path,
+                                   "tools/terminal-feasibility/program-status-consumer.h"]:
             data = ("fixture input: " + name + "\n").encode()
             path = repository / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +90,12 @@ class RetainedLinkageChecks(unittest.TestCase):
             "recipe_sha256": digest(recipe_path.read_bytes()),
             "source_inputs_sha256": source_inputs,
             "patches": [{"path": name, "sha256": source_inputs[name]} for name in patch_paths],
+            "fixture_patches": [{
+                "path": fixture_patch_path,
+                "sha256": source_inputs[fixture_patch_path],
+                "target": candidate_sets.METADATA_FIXTURE_OWNER,
+                "base_sha256": digest(fixture_source_data[candidate_sets.METADATA_FIXTURE_OWNER]),
+            }],
             "post_patch_headers_sha256": {
                 "include/ghostty/vt/zmux_metadata.h": digest(b"patched header fixture\n"),
             },
@@ -180,6 +202,42 @@ class RetainedLinkageChecks(unittest.TestCase):
             pin = digest(fixture["source_path"].read_bytes())
             rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
 
+        def missing_fixture_patch_chain(fixture):
+            source = self.read_json(fixture["source_path"])
+            source.pop("fixture_patches")
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def fixture_patch_digest_mismatch(fixture):
+            source = self.read_json(fixture["source_path"])
+            source["fixture_patches"][0]["sha256"] = "0" * 64
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def fixture_base_drift(fixture):
+            source = self.read_json(fixture["source_path"])
+            source["fixture_patches"][0]["base_sha256"] = "0" * 64
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
+        def extra_fixture_patch(fixture):
+            source = self.read_json(fixture["source_path"])
+            name = "tools/terminal-feasibility/extra-owner-fixture.patch"
+            sha256 = digest(b"unexpected fixture patch\n")
+            source["source_inputs_sha256"][name] = sha256
+            source["fixture_patches"].append({
+                "path": name,
+                "sha256": sha256,
+                "target": candidate_sets.METADATA_FIXTURE_OWNER,
+                "base_sha256": source["fixture_patches"][0]["base_sha256"],
+            })
+            self.write_json(fixture["source_path"], source)
+            pin = digest(fixture["source_path"].read_bytes())
+            rewrite_linkage(fixture, lambda manifest: manifest["source_candidate"].update(sha256=pin))
+
         def missing_target(fixture):
             rewrite_linkage(fixture, lambda manifest: manifest["darwin"]["libraries"].pop("x86_64-apple-darwin"))
 
@@ -205,6 +263,10 @@ class RetainedLinkageChecks(unittest.TestCase):
             ("boolean source schema", bad_source_boolean_schema),
             ("source manifest pin", wrong_source_pin),
             ("source recipe pin", wrong_recipe_pin),
+            ("missing versioned fixture patch chain", missing_fixture_patch_chain),
+            ("fixture patch source digest", fixture_patch_digest_mismatch),
+            ("fixture base owner pin", fixture_base_drift),
+            ("unexpected fixture patch order", extra_fixture_patch),
             ("both Apple targets", missing_target),
             ("run locator", latest_run),
             ("artifact locator", missing_artifact_id),

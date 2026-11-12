@@ -593,6 +593,7 @@ struct Envelope {
 }
 
 const PROGRAM_STATUS_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(2);
+const PROVIDER_ROUTE_RESPONSE_MARGIN: Duration = Duration::from_millis(250);
 
 enum PendingProgramStatusWork {
     LocalCommand(Box<Envelope>),
@@ -920,6 +921,7 @@ impl Desktop {
                 }
             }
         );
+        let route_deadline = route_start.then(|| Instant::now() + timeout);
         let cancellation = route_start.then(|| Arc::new(AtomicBool::new(false)));
         let (sender, receiver) = mpsc::sync_channel(1);
         self.send(Envelope {
@@ -927,18 +929,23 @@ impl Desktop {
             acknowledgement: Some(sender),
             cancellation: cancellation.clone(),
             authorization: Some(authorization),
-            reply_deadline: None,
+            reply_deadline: route_deadline,
             shared_terminal: None,
         })?;
-        receiver.recv_timeout(timeout).map_err(|error| {
-            if let Some(cancellation) = cancellation {
-                cancellation.store(true, Ordering::Release);
-            }
-            match error {
-                mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
-                mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
-            }
-        })
+        let acknowledgement_timeout = route_deadline.map_or(timeout, |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        });
+        receiver
+            .recv_timeout(acknowledgement_timeout)
+            .map_err(|error| {
+                if let Some(cancellation) = cancellation {
+                    cancellation.store(true, Ordering::Release);
+                }
+                match error {
+                    mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+                    mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+                }
+            })
     }
 
     /// Execute one native file transfer on the workspace worker and return that envelope's
@@ -2581,13 +2588,41 @@ impl Worker {
                         cancelled.load(Ordering::Acquire)
                     })
             );
-            if caller_cancelled {
+            let route_checkpoint_expired =
+                match &self.pending_program_status_checkpoints[index].work {
+                    PendingProgramStatusWork::LocalCommand(envelope)
+                        if matches!(
+                            &envelope.request.payload,
+                            Command::AgentLifecycle {
+                                request: agent_lifecycle::Request {
+                                    action: agent_lifecycle::Action::ProviderRouteStarted { .. },
+                                    ..
+                                }
+                            }
+                        ) =>
+                    {
+                        envelope.reply_deadline.is_some_and(|command_deadline| {
+                            Instant::now()
+                                >= command_deadline
+                                    .checked_sub(PROVIDER_ROUTE_RESPONSE_MARGIN)
+                                    .unwrap_or(command_deadline)
+                        })
+                    }
+                    _ => false,
+                };
+            if caller_cancelled || route_checkpoint_expired {
                 let pending = self
                     .pending_program_status_checkpoints
                     .remove(index)
-                    .expect("cancelled checkpoint index remains valid");
+                    .expect("expired checkpoint index remains valid");
                 pending.checkpoint.cancel();
                 self.program_status.end_provider_checkpoint(target);
+                if !caller_cancelled {
+                    self.resume_checkpoint_work(
+                        pending.work,
+                        Err("provider route checkpoint exceeded its admission deadline".into()),
+                    );
+                }
                 dirty = true;
                 continue;
             }
@@ -2930,6 +2965,29 @@ impl Worker {
         dirty | self.poll_zellij_observations()
     }
     fn command(&mut self, mut envelope: Envelope) {
+        let started_route = match &envelope.request.payload {
+            Command::AgentLifecycle { request }
+            | Command::AgentLifecycleCheckpointed { request, .. } => match &request.action {
+                agent_lifecycle::Action::ProviderRouteStarted {
+                    target,
+                    route_id,
+                    runtime_id,
+                    generation,
+                    ..
+                } => Some((*target, *route_id, *runtime_id, *generation)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let route_cancellation = envelope.cancellation.clone();
+        let route_deadline = envelope.reply_deadline;
+        let route_expired = || {
+            started_route.is_some()
+                && (route_cancellation
+                    .as_ref()
+                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+                    || route_deadline.is_some_and(|deadline| Instant::now() >= deadline))
+        };
         let checkpoint_request = match &envelope.request.payload {
             Command::AgentLifecycle { request }
                 if matches!(
@@ -2945,6 +3003,17 @@ impl Worker {
             _ => None,
         };
         if let Some(request) = checkpoint_request {
+            let checkpoint_deadline = Instant::now() + PROGRAM_STATUS_CHECKPOINT_TIMEOUT;
+            let checkpoint_deadline = match (&request.action, envelope.reply_deadline) {
+                (agent_lifecycle::Action::ProviderRouteStarted { .. }, Some(command_deadline)) => {
+                    checkpoint_deadline.min(
+                        command_deadline
+                            .checked_sub(PROVIDER_ROUTE_RESPONSE_MARGIN)
+                            .unwrap_or(command_deadline),
+                    )
+                }
+                _ => checkpoint_deadline,
+            };
             let target = match &request.action {
                 agent_lifecycle::Action::Register { target, .. }
                 | agent_lifecycle::Action::ProviderObservation { target, .. }
@@ -2961,9 +3030,9 @@ impl Worker {
                     Err(SessionError::QueueFull)
                 } else if let Some(slot) = self.slots.get(&target.session_id) {
                     match slot.session.as_ref() {
-                        Some(session) => session.request_program_status_checkpoint(
-                            Instant::now() + PROGRAM_STATUS_CHECKPOINT_TIMEOUT,
-                        ),
+                        Some(session) => {
+                            session.request_program_status_checkpoint(checkpoint_deadline)
+                        }
                         None => Err(SessionError::Closed),
                     }
                 } else {
@@ -3061,7 +3130,8 @@ impl Worker {
             (Some(_), Some(Err(_))) => Err(TerminalSharingError::Unavailable.into()),
             _ => Err(TerminalSharingError::Unavailable.into()),
         };
-        let result = match shared_terminal_check {
+        let mut result = match shared_terminal_check {
+            _ if route_expired() => Err(DesktopError::Timeout),
             Err(error) => Err(error),
             Ok(()) => match guard {
                 _ if self.shared.stop.load(Ordering::Acquire)
@@ -3103,10 +3173,17 @@ impl Worker {
                 },
             },
         };
+        // A ready checkpoint can outlive its caller while this command is
+        // scheduled. Retire only the exact unconfirmed reservation on expiry.
+        if route_expired() {
+            self.cancel_unacknowledged_provider_route(started_route);
+            self.agent_lifecycle_result = None;
+            result = Err(DesktopError::Timeout);
+        }
         self.agent_messages
             .observe(self.model.snapshot(), Vec::new());
         self.last_error = result.as_ref().err().map(ToString::to_string);
-        let snapshot = self.publish(false);
+        let mut snapshot = self.publish(false);
         let (created_workspaces, created_panes, created_surfaces) = previous_model
             .map(|previous| {
                 let previous_workspaces: std::collections::HashSet<_> =
@@ -3151,38 +3228,60 @@ impl Worker {
                 (workspaces, panes, surfaces)
             })
             .unwrap_or_default();
-        if let Some(sender) = acknowledgement {
-            let _ = sender.try_send(Execution {
-                agent_message_result: self.agent_message_result.take(),
-                agent_lifecycle_result: self.agent_lifecycle_result.take(),
-                result,
-                profile_operation_id: self.profile_operation_id,
-                tmux_operation_id: self.tmux_operation_id,
-                session_operation_id: self.session_operation_id,
-                metadata_result: self.metadata_result.take(),
-                notification_mutation: self.notification_mutation.take(),
-                notification_navigation: self.notification_navigation.take(),
-                notification_reply: self.notification_reply.take(),
-                browser_operation_id: self.browser_operation_id,
-                browser_dispatch: self.browser_dispatch.take(),
-                download_result: self.download_result.take(),
-                window_result: self.window_result.take(),
-                workspace_order_result: self.workspace_order_result.take(),
-                workspace_group_result: self.workspace_group_result.take(),
-                surface_order_result: self.surface_order_result.take(),
-                open_result: self.open_result.take(),
-                created_uploads: snapshot
-                    .uploads
-                    .iter()
-                    .filter(|u| u.id >= previous_upload_id)
-                    .map(|u| u.id)
-                    .collect(),
-                snapshot,
-                created_workspaces,
-                created_panes,
-                created_surfaces,
-            });
+        if route_expired() {
+            self.cancel_unacknowledged_provider_route(started_route);
+            self.agent_lifecycle_result = None;
+            result = Err(DesktopError::Timeout);
+            self.last_error = Some(DesktopError::Timeout.to_string());
+            snapshot = self.publish(false);
         }
+        if let Some(sender) = acknowledgement {
+            let delivered = sender
+                .try_send(Execution {
+                    agent_message_result: self.agent_message_result.take(),
+                    agent_lifecycle_result: self.agent_lifecycle_result.take(),
+                    result,
+                    profile_operation_id: self.profile_operation_id,
+                    tmux_operation_id: self.tmux_operation_id,
+                    session_operation_id: self.session_operation_id,
+                    metadata_result: self.metadata_result.take(),
+                    notification_mutation: self.notification_mutation.take(),
+                    notification_navigation: self.notification_navigation.take(),
+                    notification_reply: self.notification_reply.take(),
+                    browser_operation_id: self.browser_operation_id,
+                    browser_dispatch: self.browser_dispatch.take(),
+                    download_result: self.download_result.take(),
+                    window_result: self.window_result.take(),
+                    workspace_order_result: self.workspace_order_result.take(),
+                    workspace_group_result: self.workspace_group_result.take(),
+                    surface_order_result: self.surface_order_result.take(),
+                    open_result: self.open_result.take(),
+                    created_uploads: snapshot
+                        .uploads
+                        .iter()
+                        .filter(|u| u.id >= previous_upload_id)
+                        .map(|u| u.id)
+                        .collect(),
+                    snapshot,
+                    created_workspaces,
+                    created_panes,
+                    created_surfaces,
+                })
+                .is_ok();
+            if !delivered && self.cancel_unacknowledged_provider_route(started_route) {
+                self.publish(false);
+            }
+        }
+    }
+
+    fn cancel_unacknowledged_provider_route(
+        &mut self,
+        route: Option<(agent_lifecycle::Target, uuid::Uuid, uuid::Uuid, uuid::Uuid)>,
+    ) -> bool {
+        route.is_some_and(|(target, route_id, runtime_id, generation)| {
+            self.program_status
+                .cancel_provider_route(target, route_id, runtime_id, generation, None)
+        })
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
         let command = match command {

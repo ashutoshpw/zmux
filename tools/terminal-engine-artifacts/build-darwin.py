@@ -12,7 +12,9 @@ import sys
 
 from darwin_platform import (CONSUMER_MINIMUM, LIBRARY_MINIMUM,
                              inspect_darwin_archive, inspect_macho)
-from candidate_sets import (HISTORICAL, VERSIONED_7501, load_source_manifest,
+from candidate_sets import (HISTORICAL, VERSIONED_7501,
+                            METADATA_FIXTURE_ENTRYPOINT, METADATA_FIXTURE_INTEGRATED,
+                            METADATA_FIXTURE_OWNER, load_source_manifest,
                             canonical_digest,
                             source_manifest_repo_path,
                             source_manifest_file_sha256,
@@ -101,6 +103,48 @@ def sources(candidate_set=HISTORICAL):
     return recipe, pins, frozen, symbols["symbols"], source_manifest, patch_records
 
 
+def stage_metadata_fixture(work, candidate, source_manifest, run):
+    """Stage versioned owner inputs and apply only their separately pinned fixture patches."""
+    if source_manifest is None:
+        return BASE / "metadata.rs", None
+
+    fixture_patches = source_manifest["fixture_patches"]
+    fixture_root = work / "metadata-fixture-source"
+    fixture_root.mkdir()
+    fixture_inputs = {}
+    for name in (METADATA_FIXTURE_ENTRYPOINT, METADATA_FIXTURE_INTEGRATED,
+                 METADATA_FIXTURE_OWNER):
+        expected = candidate["repository_inputs_sha256"].get(name)
+        data = checked_file(REPO, name, expected)
+        (fixture_root / Path(name).name).write_bytes(data)
+        fixture_inputs[name] = digest(data)
+
+    if fixture_inputs[METADATA_FIXTURE_OWNER] != fixture_patches[0]["base_sha256"]:
+        raise Rejected("staged metadata fixture owner differs from its pinned patch base")
+    run(["git", "init", "--quiet"], "metadata-fixture-git-init", cwd=fixture_root)
+    for patch in fixture_patches:
+        patch_path = REPO / patch["path"]
+        checked_file(REPO, patch["path"], patch["sha256"])
+        label = Path(patch["path"]).name
+        run(["git", "apply", "--check", str(patch_path)],
+            "metadata-fixture-" + label + "-check", cwd=fixture_root)
+        run(["git", "apply", str(patch_path)],
+            "metadata-fixture-" + label + "-apply", cwd=fixture_root)
+
+    patched_owner = fixture_root / Path(METADATA_FIXTURE_OWNER).name
+    record = {
+        "entrypoint_path": METADATA_FIXTURE_ENTRYPOINT,
+        "entrypoint_sha256": fixture_inputs[METADATA_FIXTURE_ENTRYPOINT],
+        "integrated_sha256": fixture_inputs[METADATA_FIXTURE_INTEGRATED],
+        "owner_path": METADATA_FIXTURE_OWNER,
+        "base_owner_sha256": fixture_inputs[METADATA_FIXTURE_OWNER],
+        "patches": [{"path": patch["path"], "sha256": patch["sha256"]}
+                    for patch in fixture_patches],
+        "patched_owner_sha256": sha(patched_owner),
+    }
+    return fixture_root / Path(METADATA_FIXTURE_ENTRYPOINT).name, record
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
@@ -184,6 +228,10 @@ def main():
             "host_macos": platform.mac_ver()[0]}
         work = output / "work"
         work.mkdir()
+        metadata_fixture_entrypoint, metadata_fixture_receipt = stage_metadata_fixture(
+            work, document(HERE / "candidate.json"), source_manifest, run)
+        if metadata_fixture_receipt is not None:
+            receipt["metadata_fixture"] = metadata_fixture_receipt
         zig_pin = pins["zig"]["hosts"]["Darwin-arm64"]
         zig_root = runner.download(zig_pin, work, receipt["downloads"])
         source = runner.download(pins["ghostty"], work, receipt["downloads"])
@@ -303,7 +351,7 @@ def main():
             c_probe = directory / "c-abi"
             run([*common, "-Wall", "-Wextra", str(HERE / "darwin-abi.c"), str(library), "-o", str(c_probe)], "c-abi-link-" + arch)
             binary = directory / "metadata-fixture"
-            command = ["rustc", "--edition=2024", str(BASE / "metadata.rs"), "--target", target["rust"], "-C", "linker=" + clang]
+            command = ["rustc", "--edition=2024", str(metadata_fixture_entrypoint), "--target", target["rust"], "-C", "linker=" + clang]
             for item in [*objects, library]:
                 command += ["-C", "link-arg=" + str(item)]
             command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + str(sdk),

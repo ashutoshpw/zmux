@@ -1250,9 +1250,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 "record_id": programTarget.id
             ],
             "records": [
-                ["id": "", "state": rootProgram.state.rawValue, "title": rootProgram.title ?? ""],
+                ["id": "", "state": rootProgram.state.rawValue,
+                 "title": rootProgram.title.map { $0 as Any } ?? ""],
                 ["id": childProgram.id, "state": childProgram.state.rawValue,
-                 "progress": childProgram.progress ?? 0, "title": childProgram.title ?? ""]
+                 "progress": childProgram.progress.map { $0 as Any } ?? 0,
+                 "title": childProgram.title.map { $0 as Any } ?? ""]
             ],
             "provider_count": afterProgramSelection.agentLifecycle?.count ?? 0,
             "surface_count": programInventoryAfter.surfaces.count,

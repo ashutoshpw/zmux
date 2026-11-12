@@ -67,5 +67,14 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/portable-validation.md](references/portable-validation.md) — stable integrated full-check pass, source fingerprints and explicit hosted gates.
 - [references/final-session-repairs-recheck.md](references/final-session-repairs-recheck.md) — independent acceptance and focused re-execution of the final two Session repairs.
 - [references/swift-typecheck-repair.md](references/swift-typecheck-repair.md) — explicit tuple-switch return for hosted Swift6 compilation.
+- [references/ghostty-fixture-repair.md](references/ghostty-fixture-repair.md) — failed ARM metadata fixture cause, source-pinned owner patch, local checks, hashes and native gate.
+- [references/hosted-failures.md](references/hosted-failures.md) — exact initial Swift, Foundation and Ghostty failure evidence and rejected candidate identity.
+- [references/macos-route-admission-diagnosis.md](references/macos-route-admission-diagnosis.md) — local pre-spawn deadline mismatch, exact control path and hosted proof limits.
+- [references/route-start-budget-repair.md](references/route-start-budget-repair.md) — bounded Started-only CLI deadline, nested Desktop checkpoint cutoff, real-owner regressions and hosted proof limits.
+- [references/ghostty-fixture-recheck.md](references/ghostty-fixture-recheck.md) — initial fixture order/ST findings and independent pinning review.
+- [references/route-start-budget-recheck.md](references/route-start-budget-recheck.md) — independent deadline review and final-admission race.
+- [references/route-final-admission-repair.md](references/route-final-admission-repair.md) — parent final expiry and failed-ack rollback with real-PTY red/green controls.
+- [references/ghostty-fixture-final-recheck.md](references/ghostty-fixture-final-recheck.md) — final scoped source review and acceptance evidence.
+- [references/route-final-admission-recheck.md](references/route-final-admission-recheck.md) — final scoped source review and acceptance evidence.
 - [Protocol specification](https://superlogical.com/rex/docs/build/program-status) — revision 0.4, dated 2026-10-10.
 - [Existing provider task](../../2026-11-01/01-live-agent-sidebar/plan.md) — adapter and alert guarantees to preserve.

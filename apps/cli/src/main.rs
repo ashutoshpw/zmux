@@ -747,11 +747,26 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
     request_with_phase(options, command).map_err(|failure| failure.error)
 }
 
+fn request_until(
+    options: &ClientOptions,
+    deadline: Instant,
+    command: ControlCommand,
+) -> Result<ControlResponse, CliError> {
+    request_with_deadline(options, command, deadline).map_err(|failure| failure.error)
+}
+
 fn request_with_phase(
     options: &ClientOptions,
     command: ControlCommand,
 ) -> Result<ControlResponse, RequestFailure> {
-    let deadline = Instant::now() + options.timeout;
+    request_with_deadline(options, command, Instant::now() + options.timeout)
+}
+
+fn request_with_deadline(
+    options: &ClientOptions,
+    command: ControlCommand,
+    deadline: Instant,
+) -> Result<ControlResponse, RequestFailure> {
     let request_id = request_id();
     let request = ControlRequest {
         version: CONTROL_VERSION,

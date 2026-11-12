@@ -9,6 +9,9 @@ from verify import (HERE, REPO, Rejected, checked_file, document, digest,
 
 VERSIONED_7501 = "ghostty-7501-v1"
 HISTORICAL = "historical"
+METADATA_FIXTURE_ENTRYPOINT = "tools/terminal-feasibility/metadata.rs"
+METADATA_FIXTURE_INTEGRATED = "tools/terminal-feasibility/integrated.rs"
+METADATA_FIXTURE_OWNER = "tools/terminal-feasibility/metadata-owner.rs"
 
 SOURCE_MANIFESTS = {
     HISTORICAL: HERE / "candidate.json",
@@ -92,8 +95,10 @@ def validate_source_manifest(candidate_set, manifest):
         raise Rejected("versioned source candidate lacks its exact Darwin recipe pin")
     inputs = manifest.get("source_inputs_sha256")
     patches = manifest.get("patches")
+    fixture_patches = manifest.get("fixture_patches")
     headers = manifest.get("post_patch_headers_sha256")
-    if not isinstance(inputs, dict) or not inputs or not isinstance(patches, list) or not patches:
+    if (not isinstance(inputs, dict) or not inputs or not isinstance(patches, list)
+            or not patches or not isinstance(fixture_patches, list) or not fixture_patches):
         raise Rejected("versioned source candidate input inventory is incomplete")
     if not isinstance(headers, dict) or not headers:
         raise Rejected("versioned source candidate lacks patched header pins")
@@ -116,6 +121,25 @@ def validate_source_manifest(candidate_set, manifest):
             raise Rejected("versioned patch pin differs from its source input pin")
     if [patch["path"] for patch in patches] != expected_patch_order:
         raise Rejected("versioned source candidate patch order differs")
+    expected_fixture_patch_order = [
+        "tools/terminal-feasibility/program-status-v0.4-owner-fixture.patch",
+    ]
+    seen_fixture = set()
+    for patch in fixture_patches:
+        if (not isinstance(patch, dict) or not isinstance(patch.get("path"), str)
+                or not _is_sha256(patch.get("sha256"))
+                or patch["path"] in seen_fixture):
+            raise Rejected("invalid or duplicate versioned fixture patch pin")
+        seen_fixture.add(patch["path"])
+        if inputs.get(patch["path"]) != patch["sha256"]:
+            raise Rejected("versioned fixture patch pin differs from its source input pin")
+        if (patch.get("target") != METADATA_FIXTURE_OWNER
+                or not _is_sha256(patch.get("base_sha256"))):
+            raise Rejected("versioned fixture patch owner/base pin is invalid")
+    if [patch["path"] for patch in fixture_patches] != expected_fixture_patch_order:
+        raise Rejected("versioned fixture patch order differs")
+    if set(patch["path"] for patch in patches) & seen_fixture:
+        raise Rejected("engine patch and fixture patch inputs must remain separate")
     for name, expected in headers.items():
         if not _is_canonical_header_path(name) or not _is_sha256(expected):
             raise Rejected("invalid versioned post-patch header pin")
@@ -126,17 +150,36 @@ def validate_source_candidate_files(candidate_set, manifest, repository_root=REP
     validate_source_manifest(candidate_set, manifest)
     checked_file(repository_root, "tools/terminal-engine-artifacts/candidate.json",
                  manifest["base_candidate_sha256"])
+    baseline = document(repository_root / "tools/terminal-engine-artifacts/candidate.json")
+    baseline_inputs = baseline.get("repository_inputs_sha256")
+    if not isinstance(baseline_inputs, dict):
+        raise Rejected("historical candidate lacks its frozen repository input inventory")
+    fixture_source_sha256 = {}
+    for name in (METADATA_FIXTURE_ENTRYPOINT, METADATA_FIXTURE_INTEGRATED,
+                 METADATA_FIXTURE_OWNER):
+        expected = baseline_inputs.get(name)
+        if not _is_sha256(expected):
+            raise Rejected("historical candidate lacks a frozen metadata fixture source pin")
+        checked_file(repository_root, name, expected)
+        fixture_source_sha256[name] = expected
+    for fixture_patch in manifest["fixture_patches"]:
+        target = fixture_patch["target"]
+        expected_base = fixture_source_sha256.get(target)
+        if not _is_sha256(expected_base) or fixture_patch["base_sha256"] != expected_base:
+            raise Rejected("versioned fixture patch base differs from historical owner pin")
     checked_file(repository_root, "tools/terminal-engine-artifacts/upstream-inputs.json",
                  manifest["upstream_inputs_sha256"])
     checked_file(repository_root, "tools/terminal-engine-artifacts/darwin-recipe.json",
                  manifest["recipe_sha256"])
     for name, expected in manifest["source_inputs_sha256"].items():
         checked_file(repository_root, name, expected)
+    return fixture_source_sha256
 
 
 def validate_versioned_linkage(candidate_set, manifest, producer_receipt, *,
                                source_manifest, source_manifest_sha256, target=None,
-                               library_sha256=None, producer_sha256=None):
+                               library_sha256=None, producer_sha256=None,
+                               fixture_source_sha256=None):
     """Bind a reviewed output record to its source manifest and producer recipe."""
     if candidate_set == HISTORICAL:
         return
@@ -170,6 +213,35 @@ def validate_versioned_linkage(candidate_set, manifest, producer_receipt, *,
             or recipe_hash != computed_recipe_hash):
         raise Rejected("producer library recipe differs from reviewed recipe pin")
     validate_source_manifest(candidate_set, source_manifest)
+    fixture_receipt = producer_receipt.get("metadata_fixture")
+    fixture_patches = source_manifest["fixture_patches"]
+    if not isinstance(fixture_receipt, dict):
+        raise Rejected("producer receipt lacks its versioned metadata fixture record")
+    expected_fixture_patches = [
+        {"path": patch["path"], "sha256": patch["sha256"]}
+        for patch in fixture_patches
+    ]
+    if (fixture_receipt.get("entrypoint_path") != METADATA_FIXTURE_ENTRYPOINT
+            or fixture_receipt.get("owner_path") != METADATA_FIXTURE_OWNER
+            or fixture_receipt.get("base_owner_sha256") != fixture_patches[0]["base_sha256"]
+            or fixture_receipt.get("patches") != expected_fixture_patches
+            or not _is_sha256(fixture_receipt.get("patched_owner_sha256"))):
+        raise Rejected("producer metadata fixture differs from its pinned patch chain")
+    fixture_source_hashes = producer_receipt.get("source_sha256")
+    expected_fixture_sources = {
+        METADATA_FIXTURE_ENTRYPOINT: fixture_receipt.get("entrypoint_sha256"),
+        METADATA_FIXTURE_INTEGRATED: fixture_receipt.get("integrated_sha256"),
+        METADATA_FIXTURE_OWNER: fixture_receipt.get("base_owner_sha256"),
+    }
+    if (not isinstance(fixture_source_hashes, dict)
+            or any(not _is_sha256(value)
+                   or fixture_source_hashes.get(path) != value
+                   for path, value in expected_fixture_sources.items())):
+        raise Rejected("producer metadata fixture is not bound to captured source inputs")
+    if fixture_source_sha256 is not None:
+        if (not isinstance(fixture_source_sha256, dict)
+                or fixture_source_sha256 != expected_fixture_sources):
+            raise Rejected("producer metadata fixture differs from historical source pins")
     receipt_headers = producer_receipt.get("headers_sha256")
     source_headers = source_manifest.get("post_patch_headers_sha256")
     if (not isinstance(receipt_headers, dict) or receipt_headers != source_headers
