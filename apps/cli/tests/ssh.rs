@@ -1145,10 +1145,26 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
         ],
     );
     let closing_id = closing["created_uploads"][0].as_u64().unwrap();
+    let started = upload(&socket, closing_id, |u| {
+        u["bytes_sent"].as_u64().is_some_and(|sent| sent > 0)
+    });
+    assert!(started["bytes_sent"].as_u64().unwrap() <= started["total_bytes"].as_u64().unwrap());
     json(&socket, &["close-surface", restored_surface]);
-    let closed = upload(&socket, closing_id, |u| u["state"] == "cancelled");
+    let closed = upload(&socket, closing_id, |u| {
+        u["state"] == "cancelled" && u["source_released"] == true
+    });
     assert_eq!(closed["delivery"], "cancelled");
     assert_eq!(closed["surface_id"], restored["focused_surface"]);
+    assert!(closed["source_released"].as_bool().unwrap());
+    assert!(closed["bytes_sent"].as_u64().unwrap() >= started["bytes_sent"].as_u64().unwrap());
+    assert!(closed["bytes_sent"].as_u64().unwrap() <= closed["total_bytes"].as_u64().unwrap());
+    assert_eq!(closed["remote_result_uncertain"], true);
+    assert!(closed["remote_paths"].as_array().unwrap().is_empty());
+    assert!(
+        closed["error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty())
+    );
     fs::copy(
         fixture.root.join("client key.pub"),
         fixture.root.join("authorized_keys"),

@@ -2978,17 +2978,26 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         !help_delay_completed.exists(),
         "timed-out OpenCode help preflight must stop its synthetic child"
     );
-    let delayed_terminal = terminal_output_for(&running.desktop, terminal_session);
-    assert!(delayed_terminal.contains("OPENCODE_FALLBACK_LAUNCHED"));
-    let elapsed = delayed_terminal
-        .rsplit_once("stage=run_standalone_help_preflight; elapsed_ms=")
-        .expect("sanitized preflight timing diagnostic")
-        .1
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse::<u64>()
-        .unwrap();
+    // The calls file and the rendered PTY snapshot are independent boundaries.
+    // Wait for this invocation's diagnostic, rather than inspecting an older
+    // snapshot that can still contain the preceding fallback's launch marker.
+    let elapsed = loop {
+        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let elapsed = terminal
+            .rsplit_once("stage=run_standalone_help_preflight; elapsed_ms=")
+            .and_then(|(_, suffix)| suffix.split_once(')'))
+            .and_then(|(elapsed, _)| elapsed.parse::<u64>().ok());
+        if let Some(elapsed) = elapsed
+            && terminal.contains("OPENCODE_FALLBACK_LAUNCHED")
+        {
+            break elapsed;
+        }
+        assert!(
+            Instant::now() < delayed_fallback_deadline,
+            "slow preflight diagnostic was not published within its original wait budget"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
     assert!(
         (1900..=2700).contains(&elapsed),
         "two-second help preflight must finish inside the existing 2.7-second hook budget; elapsed_ms={elapsed}"

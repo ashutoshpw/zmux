@@ -3028,6 +3028,7 @@ impl Worker {
     }
 
     fn retire_owned(&mut self, session: Session, id: SessionId, launch_id: u64) {
+        self.cancel_transfers_for_origin(id, launch_id);
         let zellij = self.zellij_retirement_tag(id, launch_id);
         if let Err(error) = session.request_close() {
             eprintln!("zmux terminal cancellation wake: {error}");

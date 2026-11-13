@@ -52,3 +52,5 @@ Final parent response-classification repair recheck: **759/0/7** in 277.19 secon
 Combined Darwin progress/fixture repair full check: **759/0/7** in 286.36 seconds, source unchanged and preservation matched. The preceding 277.19-second runtime-only check is archived as `check-round12`. Optional Ghostty execution remains a hosted gate.
 
 Final fixture/diagnostic and cleanup-proof full check passed **759/0/7** in 264.34 seconds, source stable and preservation matched. Previous 270.30-second receipt is archived as `check-round14`. Native workflows remain separate acceptance gates.
+
+Final retirement-owner and fixture aggregate passed **763/0/7** in 262.13 seconds, including full C ABI/native lease checks, source unchanged and unrelated preservation matched. Prior failed aggregate is archived as `check-round18`; no root cause is inferred for its isolated lease assertion.

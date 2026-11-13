@@ -148,6 +148,9 @@ int main(int count, char **arguments) {
     assert(strstr(status, "\"ok\":true") && strstr(status, "\"token\":null"));
     free(status);
     char *acquired = lease(desktop.value, request);
+    if (!strstr(acquired, "\"ok\":true") || !strstr(acquired, "\"mode\":\"shared\"")) {
+        fprintf(stderr, "native shared lease acquisition response: %s\n", acquired);
+    }
     assert(strstr(acquired, "\"ok\":true") && strstr(acquired, "\"mode\":\"shared\""));
     char *token = strdup(strstr(acquired, "\"token\":") + strlen("\"token\":"));
     assert(token != NULL && token[0] == '{');

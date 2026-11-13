@@ -3,7 +3,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use zmux_desktop_runtime::{Command, Desktop, Request, Shell, Snapshot};
+use zmux_desktop_runtime::{Command, Desktop, DesktopError, Request, Shell, Snapshot};
 use zmux_workspace_core::{Action, PaneId, SessionId, SurfaceId};
 
 fn desktop() -> Desktop {
@@ -21,7 +21,19 @@ fn read_until(
     predicate: impl Fn(&Snapshot) -> bool,
 ) -> Arc<Snapshot> {
     loop {
-        let snapshot = desktop.snapshot().unwrap();
+        let snapshot = match desktop.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(DesktopError::Busy) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "desktop snapshot remained Busy until deadline"
+                );
+                thread::sleep(Duration::from_millis(2).min(remaining));
+                continue;
+            }
+            Err(error) => panic!("desktop snapshot failed: {error}"),
+        };
         if predicate(&snapshot) {
             return snapshot;
         }

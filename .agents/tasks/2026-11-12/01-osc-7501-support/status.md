@@ -590,3 +590,95 @@ dispatch or app manipulation was performed.
 - This source is ready for a cohesive commit/push and fresh hosted retries.
   Historical OpenCode setup cause remains unproven, and no app artifact is yet
   accepted. Fresh hosted results must establish final native acceptance.
+
+## Fresh hosted retry at validated source `be8ec91`
+
+- Commit `be8ec912a3b745c328f66fd196d19ddc59920845` is pushed to main.
+  It contains the accepted deterministic Desktop/engine fixtures, sanitized
+  OpenCode setup diagnostics/readiness barrier, and strengthened child cleanup
+  and timing proof. Historical OpenCode cause remains unknown.
+- Fresh runs: Foundation `43349565551`, universal macOS `43349565567`, and
+  Ghostty linkage `43349584656`, all at that exact source. Actual outcomes and
+  final artifact verification are delegated read-only. No app artifact is yet
+  claimed or accepted.
+
+## Hosted acceptance and final remaining failures at `be8ec91`
+
+- Ghostty `43349584656` is successful: ARM engine 4/4, linked Program Status
+  1/1, Session 4/4 and linked real-PTY Session 1/1 executed and passed. Both
+  Apple targets compiled/linked. Verified artifact `14003586498` is 22,998,506
+  bytes with SHA-256 `216fa1e3a07f3e6fab045f3589fa25077f1c0de037b1f1dd6819774eb4502b70`;
+  all 229 receipt source hashes match `be8ec91`. Intel runtime/native host
+  execution was not requested or claimed.
+- Foundation macOS failed the SSH upload close case: upload was failed with
+  delivery cancelled/originating terminal closed after 16,384 of 8,388,608
+  bytes. A bounded Luna owner investigation/repair is active.
+- Universal macOS failed the parent-added OpenCode diagnostic assertion. Parent
+  fixed the file-versus-rendered-snapshot publication race with an original-
+  deadline wait for the complete diagnostic. Focused case passes. No app build
+  or downloadable final ZIP exists yet; native retries remain required.
+
+## Upload cancellation owner repair ready for gates
+
+- Transfer publication now preserves owner-accepted cancellation when a later
+  worker teardown reports failure, while retaining byte counts, paths,
+  uncertainty and the transport error. Source release remains worker-owned.
+- The deterministic owner regression failed on pre-fix Failed versus Cancelled
+  and passes after repair. The real SSH close case now waits for physical input
+  acceptance and source release; it passes with cancellation/error assertions.
+  EPERM/lifecycle retry messages remain uncorrelated with this upload result.
+- Separate final review covers this owner repair and the parent OpenCode
+  diagnostic-publication wait. Full aggregate check is running on stable source.
+  Complete Ghostty linked acceptance from `be8ec91` remains separate evidence.
+
+- Parent rehashed all **229** retained inputs from the successful `be8ec91` linkage receipt against the current working tree: none changed. The transfer/Desktop and CLI test repairs do not alter that compiled engine/Session input set; no additional library rebuild is required for those unchanged bytes.
+
+- Latest complete local check passed **760/0/7** in 279.84 seconds, with unchanged source fingerprints and matching unrelated preservation hashes. The added owner regression accounts for the increased test count. Final review remains pending before scoped commit/push and fresh Foundation/macOS app gates.
+
+- Final review accepted the OpenCode wait but found that unconditional cancelled
+  projection can mask a Completed/Failed worker result published before close.
+  Parent extended the existing owner test and observed the intended pre-fix
+  Completed-to-Cancelled failure. Luna now owns the bounded ordering repair,
+  including early cancellation before physical origin retirement and exact
+  launch-generation binding if required. Worker results that predate cancellation
+  must remain truthful; the prior 760/0/7 local check predates this follow-up.
+
+## Terminal-precedence follow-up complete
+
+- Transfer cancellation now occurs before PTY closure in `retire_owned`, bound
+  to the exact session and launch generation. A fresh worker snapshot preserves
+  preexisting Completed/Failed results; active work receives the existing
+  cancellation signal, and the worker's final snapshot remains authoritative.
+  Cancelled delivery still prevents path insertion into a closed terminal.
+- Four owner cases and the loopback SSH test pass, including retained ACK-path
+  assertions; Clippy/formatting pass. Parent read the completed handoff.
+- A fresh independent ordering review and stable aggregate run are active.
+  All 229 successful Ghostty linkage inputs were rehashed again and remain
+  unchanged by this Desktop transfer-owner correction.
+
+- Aggregate ordering-repair check stopped at an existing browser-link fixture
+  unwrapping a legitimate Busy snapshot (456/1/5 partial result). Parent fixed
+  that read loop under its original deadline; both focused browser-link tests
+  pass. Corrected full aggregate is running; the transfer review remains active.
+
+- Final transfer-retirement review is accepted with no source finding; all four
+  owner cases and the SSH journey pass. Aggregate Rust **763/0/7**, strict
+  Clippy, license and general C ABI passed, but a native profile-lease fixture
+  assertion failed without response diagnostics. Parent added failure-only
+  response logging; the focused full bridge/lease gate passes. Original cause
+  is unknown, no acquisition is retried, and the full aggregate is rerunning
+  with diagnostics intact before commit.
+
+## Accepted retirement repair and complete local pass
+
+- The complete corrected aggregate is green: **763 passed, 0 failed, 7 ignored**,
+  262.13 seconds, including strict Clippy, licenses and both foreign C ABI gates.
+  Runtime/tooling source stayed unchanged and unrelated preservation matched.
+- Independent retirement review accepted early exact-generation cancellation
+  and preservation of preexisting terminal outcomes. The OpenCode publication
+  wait was accepted by the preceding review. Small fixture Busy handling and
+  native acquisition response logging retain assertions and original deadlines.
+- The original one-off native lease assertion remains unexplained; response
+  logging is retained and the complete gate now passes without retry logic.
+- Scoped commit/push and new Foundation/universal app executions follow.
+  Ghostty's successful 229-input engine/Session closure remains unchanged.

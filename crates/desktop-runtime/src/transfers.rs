@@ -34,6 +34,7 @@ pub struct TransferSnapshot {
 pub(super) struct TransferSlot {
     snapshot: TransferSnapshot,
     job: UploadJob,
+    launch_id: u64,
 }
 
 impl Worker {
@@ -48,8 +49,7 @@ impl Worker {
                 if slot.snapshot.delivery != "pending" {
                     return Err(DesktopError::Failure("upload already finished".into()));
                 }
-                slot.job.cancel();
-                slot.snapshot.delivery = "cancelled".into();
+                cancel_transfer_delivery(slot, None);
                 Ok(())
             }
             TransferCommand::PasteFiles {
@@ -102,6 +102,7 @@ impl Worker {
                         .as_ref()
                         .ok_or(DesktopError::TerminalUnavailable)?,
                 );
+                let launch_id = slot.launch_id;
                 if self
                     .transfers
                     .iter()
@@ -143,6 +144,7 @@ impl Worker {
                 });
                 self.transfers.push(TransferSlot {
                     job,
+                    launch_id,
                     snapshot: TransferSnapshot {
                         id,
                         surface_id,
@@ -178,22 +180,11 @@ impl Worker {
                         && s.session_id == Some(slot.snapshot.session_id)
                 });
             if !origin_live && slot.snapshot.delivery == "pending" {
-                slot.job.cancel();
-                slot.snapshot.delivery = "cancelled".into();
-                slot.snapshot.delivery_error = Some("originating terminal closed".into());
+                cancel_transfer_delivery(slot, Some("originating terminal closed"));
                 changed = true;
             }
             if let Ok(upload) = slot.job.snapshot() {
-                if upload.state != slot.snapshot.upload.state
-                    || upload.bytes_sent != slot.snapshot.upload.bytes_sent
-                    || upload.total_bytes != slot.snapshot.upload.total_bytes
-                    || upload.remote_paths.len() != slot.snapshot.upload.remote_paths.len()
-                    || upload.remote_result_uncertain
-                        != slot.snapshot.upload.remote_result_uncertain
-                {
-                    changed = true;
-                }
-                slot.snapshot.upload = upload;
+                changed |= publish_upload_snapshot(&mut slot.snapshot, upload);
             }
             if slot.snapshot.delivery != "pending" {
                 continue;
@@ -239,9 +230,75 @@ impl Worker {
             slot.job.cancel();
         }
     }
+    pub(super) fn cancel_transfers_for_origin(&mut self, session_id: SessionId, launch_id: u64) {
+        for slot in &mut self.transfers {
+            if transfer_matches_origin(&slot.snapshot, slot.launch_id, session_id, launch_id)
+                && slot.snapshot.delivery == "pending"
+            {
+                cancel_transfer_delivery(slot, Some("originating terminal closed"));
+            }
+        }
+    }
     pub(super) fn transfers_finished(&self) -> bool {
         self.transfers.iter().all(|s| s.job.is_finished())
     }
+}
+
+fn publish_upload_snapshot(snapshot: &mut TransferSnapshot, upload: UploadSnapshot) -> bool {
+    let changed = upload.state != snapshot.upload.state
+        || upload.bytes_sent != snapshot.upload.bytes_sent
+        || upload.total_bytes != snapshot.upload.total_bytes
+        || upload.remote_paths.len() != snapshot.upload.remote_paths.len()
+        || upload.remote_result_uncertain != snapshot.upload.remote_result_uncertain
+        || upload.error != snapshot.upload.error;
+    snapshot.upload = upload;
+    changed
+}
+
+fn cancel_transfer_delivery(slot: &mut TransferSlot, delivery_error: Option<&str>) {
+    if slot.snapshot.delivery != "pending" {
+        return;
+    }
+    let should_signal_worker = match slot.job.snapshot() {
+        Ok(upload) => cancel_transfer_snapshot(&mut slot.snapshot, upload, delivery_error),
+        Err(_) => {
+            mark_delivery_cancelled(&mut slot.snapshot, delivery_error);
+            // The producer snapshot is busy or unavailable. Signal cancellation
+            // without treating a cached state as proof that work is still active.
+            true
+        }
+    };
+    if should_signal_worker {
+        slot.job.cancel();
+    }
+}
+
+fn cancel_transfer_snapshot(
+    snapshot: &mut TransferSnapshot,
+    upload: UploadSnapshot,
+    delivery_error: Option<&str>,
+) -> bool {
+    let should_signal_worker = matches!(
+        upload.state,
+        UploadState::Preparing | UploadState::Uploading
+    );
+    publish_upload_snapshot(snapshot, upload);
+    mark_delivery_cancelled(snapshot, delivery_error);
+    should_signal_worker
+}
+
+fn mark_delivery_cancelled(snapshot: &mut TransferSnapshot, delivery_error: Option<&str>) {
+    snapshot.delivery = "cancelled".into();
+    snapshot.delivery_error = delivery_error.map(str::to_owned);
+}
+
+fn transfer_matches_origin(
+    snapshot: &TransferSnapshot,
+    transfer_launch_id: u64,
+    session_id: SessionId,
+    launch_id: u64,
+) -> bool {
+    snapshot.session_id == session_id && transfer_launch_id == launch_id
 }
 
 fn paste_paths(session: &Session, text: &str) -> Result<(), DesktopError> {
@@ -264,4 +321,114 @@ fn paste_paths(session: &Session, text: &str) -> Result<(), DesktopError> {
         SessionError::Busy => DesktopError::Busy,
         _ => DesktopError::Failure(e.to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_late_transport_failure_does_not_replace_close_cancellation() {
+        let mut snapshot = transfer_snapshot(UploadState::Uploading);
+        let upload_before_cancellation = snapshot.upload.clone();
+        assert!(cancel_transfer_snapshot(
+            &mut snapshot,
+            upload_before_cancellation,
+            Some("originating terminal closed"),
+        ));
+        assert_eq!(snapshot.upload.state, UploadState::Uploading);
+        assert_eq!(snapshot.delivery, "cancelled");
+
+        let transport_error = "write upload input: Broken pipe (os error 32); remote result is uncertain, verify remote temporary storage";
+
+        assert!(publish_upload_snapshot(
+            &mut snapshot,
+            UploadSnapshot {
+                state: UploadState::Cancelled,
+                bytes_sent: 16_384,
+                total_bytes: 8_388_608,
+                remote_paths: Vec::new(),
+                remote_result_uncertain: true,
+                error: Some(transport_error.into()),
+            },
+        ));
+
+        assert_eq!(snapshot.upload.state, UploadState::Cancelled);
+        assert_eq!(snapshot.delivery, "cancelled");
+        assert_eq!(
+            snapshot.delivery_error.as_deref(),
+            Some("originating terminal closed")
+        );
+        assert_eq!(snapshot.upload.bytes_sent, 16_384);
+        assert_eq!(snapshot.upload.total_bytes, 8_388_608);
+        assert!(snapshot.upload.remote_result_uncertain);
+        assert!(snapshot.upload.remote_paths.is_empty());
+        assert_eq!(snapshot.upload.error.as_deref(), Some(transport_error));
+    }
+
+    #[test]
+    fn closing_origin_preserves_completed_upload_outcome() {
+        assert_terminal_upload_outcome_is_preserved(UploadState::Completed);
+    }
+
+    #[test]
+    fn closing_origin_preserves_failed_upload_outcome() {
+        assert_terminal_upload_outcome_is_preserved(UploadState::Failed);
+    }
+
+    #[test]
+    fn retirement_matches_the_exact_session_launch_generation() {
+        let snapshot = transfer_snapshot(UploadState::Uploading);
+        assert!(transfer_matches_origin(&snapshot, 42, SessionId(14), 42));
+        assert!(!transfer_matches_origin(&snapshot, 41, SessionId(14), 42));
+        assert!(!transfer_matches_origin(&snapshot, 42, SessionId(15), 42));
+    }
+
+    fn transfer_snapshot(state: UploadState) -> TransferSnapshot {
+        TransferSnapshot {
+            id: 12,
+            surface_id: SurfaceId(13),
+            session_id: SessionId(14),
+            upload: UploadSnapshot {
+                state,
+                bytes_sent: 16_384,
+                total_bytes: 8_388_608,
+                remote_paths: Vec::new(),
+                remote_result_uncertain: false,
+                error: None,
+            },
+            delivery: "pending".into(),
+            delivery_error: None,
+            source_released: false,
+        }
+    }
+
+    fn assert_terminal_upload_outcome_is_preserved(state: UploadState) {
+        let mut terminal = transfer_snapshot(UploadState::Uploading);
+        let mut worker_snapshot = terminal.upload.clone();
+        worker_snapshot.state = state;
+        worker_snapshot.remote_paths = vec!["/tmp/already-acknowledged".into()];
+        worker_snapshot.remote_result_uncertain = state == UploadState::Failed;
+        worker_snapshot.error = (state == UploadState::Failed).then(|| "earlier failure".into());
+
+        assert!(!cancel_transfer_snapshot(
+            &mut terminal,
+            worker_snapshot,
+            Some("originating terminal closed"),
+        ));
+        assert_eq!(
+            terminal.upload.state, state,
+            "closing after a terminal worker result must preserve that result"
+        );
+        assert_eq!(terminal.upload.remote_paths, ["/tmp/already-acknowledged"]);
+        assert_eq!(
+            terminal.upload.remote_result_uncertain,
+            state == UploadState::Failed
+        );
+        assert_eq!(
+            terminal.upload.error.as_deref(),
+            (state == UploadState::Failed).then_some("earlier failure")
+        );
+        assert_eq!(terminal.delivery, "cancelled");
+    }
 }

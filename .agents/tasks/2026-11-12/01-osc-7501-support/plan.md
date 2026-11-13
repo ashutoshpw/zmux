@@ -97,3 +97,10 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/desktop-barrier-repair.md](references/desktop-barrier-repair.md) — deterministic actual-checkpoint FIFO barriers and command lifetime through public Programs selection.
 - [references/desktop-barrier-recheck.md](references/desktop-barrier-recheck.md) — independent acceptance of FIFO/public Programs and engine-baseline fixture repairs.
 - [references/opencode-hosted-setup-recheck.md](references/opencode-hosted-setup-recheck.md) — diagnostic-scope acceptance and child cleanup/timing coverage finding, resolved in repair evidence.
+- [references/hosted-final-be8ec91.md](references/hosted-final-be8ec91.md) — accepted complete Ghostty linkage, exact-source SSH Foundation failure and pending app outcome.
+- [references/opencode-publication-repair.md](references/opencode-publication-repair.md) — original-budget wait for complete terminal timing diagnostic after independent file publication.
+- [references/ssh-upload-close-repair.md](references/ssh-upload-close-repair.md) — accepted cancellation versus late transport failure, deterministic owner red/green and SSH integration evidence.
+- [references/final-cancellation-recheck.md](references/final-cancellation-recheck.md) — accepted diagnostic wait and already-terminal versus active-cancellation ordering finding.
+- [references/browser-link-snapshot-repair.md](references/browser-link-snapshot-repair.md) — local aggregate Busy unwrap failure and bounded fixture read repair without command replay.
+- [references/transfer-retirement-final-recheck.md](references/transfer-retirement-final-recheck.md) — independent acceptance of early generation-bound cancellation and terminal outcome precedence.
+- [references/native-lease-diagnostic.md](references/native-lease-diagnostic.md) — aggregate-only native lease assertion, retained response diagnostic and focused pass without cause claim.
