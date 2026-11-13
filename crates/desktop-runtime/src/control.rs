@@ -33,6 +33,7 @@ pub const MAX_CONTROL_REQUEST_BYTES: usize = 16_384;
 pub const MAX_CONTROL_RESPONSE_BYTES: usize = 1_048_576;
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const HOOK_EVENT_MAX_BUDGET: Duration = Duration::from_millis(2700);
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(250);
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
 
@@ -513,6 +514,11 @@ fn serve_connection(
             Err(ReadRequestError::Json(error)) => {
                 ControlResponse::failure(0, "invalid_request", error.to_string())
             }
+            Err(ReadRequestError::InvalidDeadline) => ControlResponse::failure(
+                0,
+                "invalid_request",
+                "deadline_monotonic_ns must be a nonnegative integer",
+            ),
         },
         Ok(_) => ControlResponse::failure(0, "unauthorized", "peer user does not own zmux"),
         Err(error) => ControlResponse::failure(
@@ -530,9 +536,15 @@ enum ReadRequestError {
     Oversized,
     Io(io::Error),
     Json(serde_json::Error),
+    InvalidDeadline,
 }
 
-fn read_request(stream: &mut UnixStream) -> Result<ControlRequest, ReadRequestError> {
+struct ParsedControlRequest {
+    request: ControlRequest,
+    deadline_monotonic_ns: Option<u64>,
+}
+
+fn read_request(stream: &mut UnixStream) -> Result<ParsedControlRequest, ReadRequestError> {
     let mut length = [0_u8; 4];
     stream
         .read_exact(&mut length)
@@ -545,7 +557,19 @@ fn read_request(stream: &mut UnixStream) -> Result<ControlRequest, ReadRequestEr
     stream
         .read_exact(&mut bytes)
         .map_err(ReadRequestError::Io)?;
-    serde_json::from_slice(&bytes).map_err(ReadRequestError::Json)
+    let mut frame: Value = serde_json::from_slice(&bytes).map_err(ReadRequestError::Json)?;
+    let deadline_monotonic_ns = match frame
+        .as_object_mut()
+        .and_then(|request| request.remove("deadline_monotonic_ns"))
+    {
+        Some(value) => Some(value.as_u64().ok_or(ReadRequestError::InvalidDeadline)?),
+        None => None,
+    };
+    let request = serde_json::from_value(frame).map_err(ReadRequestError::Json)?;
+    Ok(ParsedControlRequest {
+        request,
+        deadline_monotonic_ns,
+    })
 }
 
 fn write_response(stream: &mut UnixStream, response: &ControlResponse) -> io::Result<()> {
@@ -559,11 +583,12 @@ fn write_response(stream: &mut UnixStream, response: &ControlResponse) -> io::Re
 
 fn handle_request(
     desktop: &Desktop,
-    request: ControlRequest,
+    parsed: ParsedControlRequest,
     gate: &ControlGate,
 ) -> ControlResponse {
-    let version = request.version;
-    let mut response = handle_versioned_request(desktop, request, gate);
+    let version = parsed.request.version;
+    let mut response =
+        handle_versioned_request(desktop, parsed.request, parsed.deadline_monotonic_ns, gate);
     // The new server accepts the original v1 request shape and responds in that version.
     // Password-capable clients require v2; the native C ABI has its own version contract.
     if version == 1 || version == CONTROL_VERSION {
@@ -575,6 +600,7 @@ fn handle_request(
 fn handle_versioned_request(
     desktop: &Desktop,
     request: ControlRequest,
+    deadline_monotonic_ns: Option<u64>,
     gate: &ControlGate,
 ) -> ControlResponse {
     if request.version != 1 && request.version != CONTROL_VERSION {
@@ -588,6 +614,26 @@ fn handle_versioned_request(
         return ControlResponse::failure(0, "invalid_request_id", "request_id must be nonzero");
     }
     let request_id = request.request_id;
+    let hook_event_deadline = match deadline_monotonic_ns {
+        Some(_) if !receipt_bearing_hook_event(&request.command) => {
+            return ControlResponse::failure(
+                request_id,
+                "invalid_deadline",
+                "absolute deadlines are supported only for receipt-bearing lifecycle events",
+            );
+        }
+        Some(deadline) => match monotonic_deadline(deadline) {
+            Some(deadline) => Some(deadline),
+            None => {
+                return ControlResponse::failure(
+                    request_id,
+                    "deadline_elapsed",
+                    "hook event deadline elapsed before command admission",
+                );
+            }
+        },
+        None => None,
+    };
     let admission = match gate.admit(
         ControlOrigin::LocalOwner,
         &request.command,
@@ -598,7 +644,7 @@ fn handle_versioned_request(
     };
     let read = crate::control_policy::is_read(&request.command);
     let capabilities = matches!(request.command, ControlCommand::Capabilities);
-    match dispatch(desktop, request, &admission) {
+    match dispatch(desktop, request, &admission, hook_event_deadline) {
         Ok(result) if !read => ControlResponse::success(request_id, result),
         Ok(mut result) => match admission.check() {
             Err(error) => ControlResponse::failure(request_id, error.code(), error.to_string()),
@@ -618,18 +664,22 @@ fn dispatch(
     desktop: &Desktop,
     request: ControlRequest,
     admission: &ControlAdmission,
+    hook_event_deadline: Option<Instant>,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
         ControlCommand::AgentLifecycle {
             request: lifecycle_request,
-        } => mutate(
-            desktop,
-            admission,
-            request.request_id,
-            Command::AgentLifecycle {
+        } => {
+            let command = Command::AgentLifecycle {
                 request: lifecycle_request,
-            },
-        ),
+            };
+            match hook_event_deadline {
+                Some(deadline) => {
+                    mutate_until(desktop, admission, request.request_id, command, deadline)
+                }
+                None => mutate(desktop, admission, request.request_id, command),
+            }
+        }
         ControlCommand::SelectAgentTarget { target } => mutate(
             desktop,
             admission,
@@ -1201,18 +1251,75 @@ fn mutate(
     request_id: u64,
     payload: Command,
 ) -> Result<Value, (&'static str, String)> {
-    let execution = desktop
-        .execute_authorized(
-            Request {
-                version: CONTROL_VERSION,
-                request_id,
-                payload,
-            },
-            COMMAND_TIMEOUT,
-            admission.clone(),
+    let execution = desktop.execute_authorized(
+        Request {
+            version: CONTROL_VERSION,
+            request_id,
+            payload,
+        },
+        COMMAND_TIMEOUT,
+        admission.clone(),
+    );
+    complete_mutation(execution)
+}
+
+fn receipt_bearing_hook_event(command: &ControlCommand) -> bool {
+    matches!(
+        command,
+        ControlCommand::AgentLifecycle {
+            request: crate::agent_lifecycle::Request {
+                action: crate::agent_lifecycle::Action::Event {
+                    hook_id: Some(_),
+                    ..
+                },
+                ..
+            }
+        }
+    )
+}
+
+fn monotonic_deadline(deadline_ns: u64) -> Option<Instant> {
+    let instant_now = Instant::now();
+    let monotonic_now = monotonic_ns();
+    let remaining_ns = deadline_ns.saturating_sub(monotonic_now);
+    let duration = Duration::from_nanos(remaining_ns).min(HOOK_EVENT_MAX_BUDGET);
+    (remaining_ns > 0).then(|| instant_now + duration)
+}
+
+fn monotonic_ns() -> u64 {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    u64::try_from(now.tv_sec)
+        .expect("monotonic clock seconds are nonnegative")
+        .saturating_mul(1_000_000_000)
+        .saturating_add(
+            u64::try_from(now.tv_nsec).expect("monotonic clock nanoseconds are nonnegative"),
         )
-        .map_err(desktop_error)?;
+}
+
+fn mutate_until(
+    desktop: &Desktop,
+    admission: &ControlAdmission,
+    request_id: u64,
+    payload: Command,
+    deadline: Instant,
+) -> Result<Value, (&'static str, String)> {
+    complete_mutation(desktop.execute_authorized_until(
+        Request {
+            version: CONTROL_VERSION,
+            request_id,
+            payload,
+        },
+        deadline,
+        admission.clone(),
+    ))
+}
+
+fn complete_mutation(
+    execution: Result<crate::Execution, DesktopError>,
+) -> Result<Value, (&'static str, String)> {
+    let execution = execution.map_err(desktop_error)?;
     execution.result.map_err(|error| match error {
+        error @ DesktopError::Timeout => desktop_error(error),
         DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::Browser(error) => (error.code(), error.to_string()),

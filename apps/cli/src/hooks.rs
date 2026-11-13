@@ -29,6 +29,24 @@ mod plugin;
 mod provider;
 const EVENT_BUDGET: Duration = Duration::from_millis(2700);
 const LIFECYCLE_BUDGET: Duration = Duration::from_millis(150);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HookOutcome {
+    Receipt(HookDisposition),
+    Unknown,
+}
+
+impl HookOutcome {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Receipt(HookDisposition::AlertCovered) => "alert_covered",
+            Self::Receipt(HookDisposition::HandledNoAlert) => "handled_no_alert",
+            Self::Receipt(HookDisposition::NotHandled) => "not_handled",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 const FRAME_LIMIT: usize = 65536;
 const ROUTE_ENV: &str = "ZMUX_CLAUDE_EVENT_SOCKET";
 
@@ -450,7 +468,7 @@ pub(super) fn run(
         Invocation::Event { event } => {
             // Every failure is a nonblocking provider no-op; do not print input,
             // body, capability or provider diagnostics to stderr.
-            if event_client(&event).is_err() {
+            if matches!(event_client(&event), Err(_) | Ok(HookOutcome::Unknown)) {
                 let _ = stdout_before(b"{}", Instant::now() + Duration::from_millis(50));
             }
             Ok(0)
@@ -818,8 +836,7 @@ fn automatic_launch(
 }
 
 fn monotonic_ms() -> u64 {
-    let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-    (t.tv_sec as u64).saturating_mul(1000) + (t.tv_nsec as u64) / 1_000_000
+    super::monotonic_ns() / 1_000_000
 }
 fn send_frame(stream: &mut UnixStream, value: &Value, deadline: Instant) -> Result<(), CliError> {
     let bytes = serde_json::to_vec(value).map_err(|_| CliError("invalid hook frame".into()))?;
@@ -909,7 +926,7 @@ fn hook_input(deadline: Instant) -> Result<Value, CliError> {
     serde_json::from_slice(&bytes).map_err(|_| CliError("malformed hook input".into()))
 }
 
-fn event_client(event: &str) -> Result<HookDisposition, CliError> {
+fn event_client(event: &str) -> Result<HookOutcome, CliError> {
     let deadline = Instant::now() + EVENT_BUDGET;
     let payload = hook_input(deadline)?;
     event_client_payload(event, payload, deadline)
@@ -919,7 +936,7 @@ fn event_client_payload(
     event_name: &str,
     payload: Value,
     deadline: Instant,
-) -> Result<HookDisposition, CliError> {
+) -> Result<HookOutcome, CliError> {
     let event: ClaudeHookEvent = serde_json::from_value(payload.clone())
         .map_err(|_| CliError("invalid typed Claude hook input".into()))?;
     if event.name() != event_name {
@@ -944,22 +961,39 @@ fn event_client_payload(
     )?;
     socket.set_nonblocking(true)?;
     let mut stream: UnixStream = socket.into();
-    send_frame(
+    if let Err(failure) = send_event_frame(
         &mut stream,
         &json!({"event":event_name,"hook_id":hook_id,"input":input,"expires_monotonic_ms":expires}),
         deadline,
-    )?;
-    let result = read_frame(&mut stream, deadline)?;
+    ) {
+        if failure.may_have_sent {
+            return Ok(HookOutcome::Unknown);
+        }
+        return Err(failure.error);
+    }
+    let result = match read_frame(&mut stream, deadline) {
+        Ok(result) => result,
+        Err(_) => {
+            eprintln!(
+                "zmux: local Claude lifecycle receipt was lost after dispatch; outcome unknown and no fallback was issued"
+            );
+            return Ok(HookOutcome::Unknown);
+        }
+    };
     let disposition = match result["hook_disposition"].as_str() {
-        Some("alert_covered") => HookDisposition::AlertCovered,
-        Some("handled_no_alert") => HookDisposition::HandledNoAlert,
-        Some("not_handled") => HookDisposition::NotHandled,
-        _ => return Err(CliError("invalid lifecycle hook receipt".into())),
+        Some("alert_covered") => HookOutcome::Receipt(HookDisposition::AlertCovered),
+        Some("handled_no_alert") => HookOutcome::Receipt(HookDisposition::HandledNoAlert),
+        Some("not_handled") => HookOutcome::Receipt(HookDisposition::NotHandled),
+        Some("unknown") => HookOutcome::Unknown,
+        _ => HookOutcome::Unknown,
     };
     let output = result
         .get("output")
         .filter(|v| v.is_object())
-        .ok_or_else(|| CliError("invalid hook response".into()))?;
+        .ok_or(HookOutcome::Unknown);
+    let Ok(output) = output else {
+        return Ok(HookOutcome::Unknown);
+    };
     let encoded =
         serde_json::to_vec(output).map_err(|_| CliError("invalid hook response".into()))?;
     // There is deliberately no Ack/ReadTurn, even after complete stdout.
@@ -970,6 +1004,35 @@ fn event_client_payload(
         let _ = send_frame(&mut stream, &json!({"submission_reported":true}), deadline);
     }
     Ok(disposition)
+}
+
+fn send_event_frame(
+    stream: &mut UnixStream,
+    value: &Value,
+    deadline: Instant,
+) -> Result<(), super::RequestFailure> {
+    let bytes = serde_json::to_vec(value).map_err(|error| {
+        super::RequestFailure::before_send(CliError(format!("encode local hook frame: {error}")))
+    })?;
+    if bytes.len() > FRAME_LIMIT {
+        return Err(super::RequestFailure::before_send(CliError(
+            "hook frame exceeds64KiB".into(),
+        )));
+    }
+    let mut any_request_bytes_sent = false;
+    super::write_before_tracking(
+        stream,
+        &(bytes.len() as u32).to_be_bytes(),
+        deadline,
+        &mut any_request_bytes_sent,
+    )
+    .and_then(|()| {
+        super::write_before_tracking(stream, &bytes, deadline, &mut any_request_bytes_sent)
+    })
+    .map_err(|error| super::RequestFailure {
+        error: CliError(error.to_string()),
+        may_have_sent: any_request_bytes_sent,
+    })
 }
 
 /// Send only the typed facts used by the local adapter. Provider prompt text,
@@ -1068,24 +1131,39 @@ fn combined_event(event_name: &str) {
         parsed_input.and_then(|payload| silent_fallback_kind(payload, event_name));
     let fallback_on_error = uncertain_fallback_kind(parsed_input, event_name);
     let disposition = input.and_then(|payload| event_client_payload(event_name, payload, deadline));
-    let fallback = match disposition {
-        Ok(HookDisposition::AlertCovered | HookDisposition::HandledNoAlert) => None,
-        // A valid idle_prompt follows Stop. Stop owns the NotHandled fallback;
-        // repeating it here would create a second completion notice.
-        Ok(HookDisposition::NotHandled) if idle_prompt => None,
-        Ok(HookDisposition::NotHandled) => fallback_on_not_handled,
-        Err(_) => fallback_on_error,
-    };
+    let fallback = fallback_for_outcome(
+        &disposition,
+        fallback_on_not_handled,
+        fallback_on_error,
+        idle_prompt,
+    );
     if let Some(fallback) = fallback
         && let Some(root) = env::var_os("ZMUX_SHELL_INTEGRATION_DIRECTORY")
     {
-        // The owner receipt is exact to this Zmux hook invocation. A missing,
-        // rejected or ambiguous receipt keeps a visual-only terminal fallback;
-        // the generic OS notification path must not add a second sound.
+        // This FIFO renders the selected fallback without sound; provider
+        // ownership continues to control generic OS notifications.
         let _ = write_notice_event(&PathBuf::from(root), fallback);
     }
-    if disposition.is_err() {
+    if matches!(disposition.as_ref(), Err(_) | Ok(HookOutcome::Unknown)) {
         let _ = stdout_before(b"{}", Instant::now() + Duration::from_millis(50));
+    }
+}
+
+fn fallback_for_outcome(
+    outcome: &Result<HookOutcome, CliError>,
+    fallback_on_not_handled: Option<&'static str>,
+    fallback_on_error: Option<&'static str>,
+    idle_prompt: bool,
+) -> Option<&'static str> {
+    match outcome {
+        Ok(HookOutcome::Receipt(
+            HookDisposition::AlertCovered | HookDisposition::HandledNoAlert,
+        ))
+        | Ok(HookOutcome::Unknown) => None,
+        // A valid idle_prompt follows Stop. Stop owns the NotHandled fallback.
+        Ok(HookOutcome::Receipt(HookDisposition::NotHandled)) if idle_prompt => None,
+        Ok(HookOutcome::Receipt(HookDisposition::NotHandled)) => fallback_on_not_handled,
+        Err(_) => fallback_on_error,
     }
 }
 
@@ -1205,6 +1283,85 @@ fn lifecycle_operation_with_deadline(
         },
     )?)
 }
+
+fn authoritative_provider_state_operation(
+    options: &ClientOptions,
+    deadline: Instant,
+    lifecycle_request: LifecycleRequest,
+) -> Result<Value, CliError> {
+    // Register and ProviderObservation wait for a Session checkpoint. Preserve
+    // the caller's original deadline while bounding it by the existing hook
+    // event budget; never renew it in this later helper.
+    lifecycle_operation_with_deadline(
+        options,
+        deadline.min(Instant::now() + EVENT_BUDGET),
+        lifecycle_request,
+    )
+}
+
+fn receipt_bearing_hook_event_operation(
+    options: &ClientOptions,
+    deadline: Instant,
+    lifecycle_request: LifecycleRequest,
+) -> Result<HookOutcome, CliError> {
+    let deadline = deadline.min(Instant::now() + EVENT_BUDGET);
+    let budget = ClientOptions {
+        socket: options.socket.clone(),
+        password: options.password.clone(),
+        timeout: socket_budget(deadline)?,
+    };
+    let deadline_monotonic_ns = super::monotonic_deadline_ns(deadline);
+    let response = match super::request_until_with_control_deadline(
+        &budget,
+        deadline,
+        deadline_monotonic_ns,
+        ControlCommand::AgentLifecycle {
+            request: lifecycle_request,
+        },
+    ) {
+        Ok(response) => response,
+        Err(failure) if failure.may_have_sent => {
+            eprintln!(
+                "zmux: local Claude lifecycle event outcome unknown after dispatch; no retry or fallback was issued"
+            );
+            return Ok(HookOutcome::Unknown);
+        }
+        Err(failure) => return Err(failure.error),
+    };
+    if !response.ok {
+        let Some(error) = response.error else {
+            return Ok(HookOutcome::Unknown);
+        };
+        // Only admission failures prove that the lifecycle owner was never
+        // entered. Generic command failures can follow a committed Event.
+        if !matches!(
+            error.code.as_str(),
+            "unauthorized"
+                | "authorization_revoked"
+                | "authorization_unavailable"
+                | "policy_denied"
+                | "invalid_deadline"
+                | "deadline_elapsed"
+                | "overloaded"
+        ) {
+            return Ok(HookOutcome::Unknown);
+        }
+        return Err(CliError(format!("{}: {}", error.code, error.message)));
+    }
+    let Some(result) = response.result else {
+        return Ok(HookOutcome::Unknown);
+    };
+    if result["accepted"] != true {
+        return Ok(HookOutcome::Unknown);
+    }
+    match result["hook_disposition"].as_str() {
+        Some("alert_covered") => Ok(HookOutcome::Receipt(HookDisposition::AlertCovered)),
+        Some("handled_no_alert") => Ok(HookOutcome::Receipt(HookDisposition::HandledNoAlert)),
+        Some("not_handled") => Ok(HookOutcome::Receipt(HookDisposition::NotHandled)),
+        _ => Ok(HookOutcome::Unknown),
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct Route {
     namespace: Uuid,
@@ -1513,7 +1670,7 @@ impl Adapter<'_> {
                 provider_session_id,
             },
         };
-        let result = lifecycle_operation(self.options, deadline, request)?;
+        let result = authoritative_provider_state_operation(self.options, deadline, request)?;
         if result["accepted"] != true {
             return Err(CliError(
                 "desktop did not accept provider lifecycle registration".into(),
@@ -1537,9 +1694,9 @@ impl Adapter<'_> {
         event: LifecycleEvent,
         hook_id: Option<Uuid>,
         deadline: Instant,
-    ) -> Result<HookDisposition, CliError> {
+    ) -> Result<HookOutcome, CliError> {
         let Some(capability) = self.lifecycle.as_mut() else {
-            return Ok(HookDisposition::NotHandled);
+            return Ok(HookOutcome::Receipt(HookDisposition::NotHandled));
         };
         let is_terminal = matches!(
             &event,
@@ -1576,22 +1733,27 @@ impl Adapter<'_> {
                 event,
             },
         };
-        let result = lifecycle_operation(self.options, deadline, request)?;
-        if result["accepted"] != true {
-            return Err(CliError(
-                "desktop did not accept provider lifecycle event".into(),
-            ));
-        }
-        let disposition = match result["hook_disposition"].as_str() {
-            Some("alert_covered") => HookDisposition::AlertCovered,
-            Some("handled_no_alert") => HookDisposition::HandledNoAlert,
-            Some("not_handled") => HookDisposition::NotHandled,
-            _ => return Err(CliError("desktop returned an invalid hook receipt".into())),
+        let outcome = if hook_id.is_some() {
+            receipt_bearing_hook_event_operation(self.options, deadline, request)?
+        } else {
+            let result = lifecycle_operation(self.options, deadline, request)?;
+            if result["accepted"] != true {
+                return Err(CliError(
+                    "desktop did not accept provider lifecycle event".into(),
+                ));
+            }
+            let disposition = match result["hook_disposition"].as_str() {
+                Some("alert_covered") => HookDisposition::AlertCovered,
+                Some("handled_no_alert") => HookDisposition::HandledNoAlert,
+                Some("not_handled") => HookDisposition::NotHandled,
+                _ => return Err(CliError("desktop returned an invalid hook receipt".into())),
+            };
+            HookOutcome::Receipt(disposition)
         };
         if is_terminal {
             self.lifecycle = None;
         }
-        Ok(disposition)
+        Ok(outcome)
     }
 
     fn try_lifecycle_event(
@@ -1599,18 +1761,19 @@ impl Adapter<'_> {
         event: &ClaudeHookEvent,
         hook_id: Uuid,
         deadline: Instant,
-    ) -> Result<HookDisposition, CliError> {
+    ) -> Result<HookOutcome, CliError> {
         let result = match event {
-            ClaudeHookEvent::SessionEnd { .. } => Ok(HookDisposition::NotHandled),
+            ClaudeHookEvent::SessionEnd { .. } => {
+                Ok(HookOutcome::Receipt(HookDisposition::NotHandled))
+            }
             _ => {
                 // Register is exact-identity idempotent. If the bounded startup
                 // request timed out, a later matching hook can recover the cap.
                 self.register_lifecycle(deadline).and_then(|()| {
-                    event
-                        .lifecycle_event()
-                        .map_or(Ok(HookDisposition::NotHandled), |event| {
-                            self.lifecycle_event(event, Some(hook_id), deadline)
-                        })
+                    event.lifecycle_event().map_or(
+                        Ok(HookOutcome::Receipt(HookDisposition::NotHandled)),
+                        |event| self.lifecycle_event(event, Some(hook_id), deadline),
+                    )
                 })
             }
         };
@@ -1631,8 +1794,14 @@ impl Adapter<'_> {
         event: &ClaudeHookEvent,
         hook_id: Uuid,
         deadline: Instant,
-    ) -> Result<(Value, Option<Uuid>, HookDisposition), CliError> {
-        let noop = || (json!({}), None, HookDisposition::NotHandled);
+    ) -> Result<(Value, Option<Uuid>, HookOutcome), CliError> {
+        let noop = || {
+            (
+                json!({}),
+                None,
+                HookOutcome::Receipt(HookDisposition::NotHandled),
+            )
+        };
         let startup = matches!(event, ClaudeHookEvent::SessionStart { .. });
         if self.disabled {
             if startup && event.is_main_session() {
@@ -1664,7 +1833,7 @@ impl Adapter<'_> {
         }
         let disposition = self
             .try_lifecycle_event(event, hook_id, deadline)
-            .unwrap_or(HookDisposition::NotHandled);
+            .unwrap_or(HookOutcome::Receipt(HookDisposition::NotHandled));
         match event {
             ClaudeHookEvent::SessionStart { source, .. } => {
                 if !self.inbox_enabled {
@@ -1863,7 +2032,7 @@ impl Adapter<'_> {
         }
         send_frame(
             &mut stream,
-            &json!({"output":output,"attempt_id":attempt,"hook_disposition":hook_disposition}),
+            &json!({"output":output,"attempt_id":attempt,"hook_disposition":hook_disposition.wire_name()}),
             deadline,
         )?;
         if let Some(attempt_id) = attempt {

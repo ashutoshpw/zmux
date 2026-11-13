@@ -71,9 +71,9 @@ struct ClientOptions {
     password: Option<SocketPassword>,
 }
 
-struct RequestFailure {
-    error: CliError,
-    may_have_sent: bool,
+pub(crate) struct RequestFailure {
+    pub(crate) error: CliError,
+    pub(crate) may_have_sent: bool,
 }
 
 impl RequestFailure {
@@ -755,6 +755,15 @@ fn request_until(
     request_with_deadline(options, command, deadline).map_err(|failure| failure.error)
 }
 
+pub(crate) fn request_until_with_control_deadline(
+    options: &ClientOptions,
+    deadline: Instant,
+    deadline_monotonic_ns: u64,
+    command: ControlCommand,
+) -> Result<ControlResponse, RequestFailure> {
+    request_with_control_deadline(options, command, deadline, Some(deadline_monotonic_ns))
+}
+
 fn request_with_phase(
     options: &ClientOptions,
     command: ControlCommand,
@@ -767,6 +776,15 @@ fn request_with_deadline(
     command: ControlCommand,
     deadline: Instant,
 ) -> Result<ControlResponse, RequestFailure> {
+    request_with_control_deadline(options, command, deadline, None)
+}
+
+fn request_with_control_deadline(
+    options: &ClientOptions,
+    command: ControlCommand,
+    deadline: Instant,
+    deadline_monotonic_ns: Option<u64>,
+) -> Result<ControlResponse, RequestFailure> {
     let request_id = request_id();
     let request = ControlRequest {
         version: CONTROL_VERSION,
@@ -774,6 +792,12 @@ fn request_with_deadline(
         password: options.password.clone(),
         command,
     };
+    let mut request = serde_json::to_value(request).map_err(|error| {
+        RequestFailure::before_send(CliError(format!("encode local-control request: {error}")))
+    })?;
+    if let Some(deadline_monotonic_ns) = deadline_monotonic_ns {
+        request["deadline_monotonic_ns"] = serde_json::json!(deadline_monotonic_ns);
+    }
     let bytes = serde_json::to_vec(&request).map_err(|error| {
         RequestFailure::before_send(CliError(format!("encode local-control request: {error}")))
     })?;
@@ -970,6 +994,25 @@ fn request_id() -> u64 {
         .as_nanos() as u64;
     let id = nanos ^ u64::from(std::process::id()).rotate_left(32);
     id.max(1)
+}
+
+pub(crate) fn monotonic_deadline_ns(deadline: Instant) -> u64 {
+    let monotonic_now = monotonic_ns();
+    let remaining_ns = deadline
+        .saturating_duration_since(Instant::now())
+        .as_nanos()
+        .min(u64::MAX as u128) as u64;
+    monotonic_now.saturating_add(remaining_ns)
+}
+
+pub(crate) fn monotonic_ns() -> u64 {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    u64::try_from(now.tv_sec)
+        .expect("monotonic clock seconds are nonnegative")
+        .saturating_mul(1_000_000_000)
+        .saturating_add(
+            u64::try_from(now.tv_nsec).expect("monotonic clock nanoseconds are nonnegative"),
+        )
 }
 
 fn doctor(options: &ClientOptions) -> Result<(), CliError> {

@@ -1,30 +1,35 @@
 # Status
 
 - **State:** in-progress
-- **Updated:** 2026-11-12
+- **Updated:** 2026-11-13
 - **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Integration source committed and pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
 
 ## Current delivery gates
 
-- Latest pushed source: `7bf0864f9155384684f8fe92be8e9c547fdd9add`.
-  Portable `scripts/check` passed **757/0/7**, static/license/ABI checks passed,
-  source fingerprints matched and unrelated work was preserved. Final fixture
-  and route admission rechecks accepted their repairs.
-- Fresh Ghostty producer [43315098805](https://github.com/ashutoshpw/zmux/actions/runs/43315098805)
-  succeeded at that source: both thin libraries were built without reuse; ARM
-  C ABI and the corrected native metadata fixture passed. Intel was compiled
-  and inspected, not executed. Actual artifact `13988885464` was downloaded;
-  API size/digest and bounded extraction verified. Independent byte review is
-  pending, followed by accepted linkage data and hosted Rust/Session tests.
-- macOS build `43315039604` stopped at strict Swift typechecking: three smoke
-  calls reached a pure presentation-options helper inheriting MainActor.
-  The one-declaration `nonisolated` repair is complete after a Sendable/purity
-  audit. Its portable pre-commit check is running; native compilation must rerun.
-- Foundation `43315039608`: Linux passed; macOS progressed through pre-spawn
-  admission and fixture launch but then timed out during provider attachment.
-  A bounded read-only diagnosis of that later checkpoint/RPC path is underway.
-  No accepted universal app artifact exists for this feature. Earlier failed/candidate runs are not
-  delivery evidence.
+- Latest pushed source: `9048d943eea63ff18218f0ba1b0dbfe158810ccf`.
+  The final CLI/Desktop repair is ready for a cohesive commit. Its full portable
+  `scripts/check` passed **759/0/7** in 277.19 seconds, including formatting,
+  strict Clippy, license inventory and bridge ABI. Source fingerprints stayed
+  unchanged and unrelated-file preservation hashes matched.
+- Separate review accepted deadline propagation, authorization, bounded queues,
+  cancellation, prior test-gap repairs and route rollback. Parent resolved its
+  two remaining response-classification findings with intended pre-fix failures
+  and a passing extended production Adapter transport case. Unknown outcomes
+  never fabricate a receipt, retry an Event or select an unkeyed fallback.
+- Fresh Ghostty producer `43315098805` from `7bf0864` has accepted exact library
+  bytes. Linkage `43335306931` at `9048d94` passed ARM engine and OSC 7501 engine
+  tests, then failed two existing Session backpressure fixtures. New Session/PTY
+  acceptance and Intel compilation were not reached; read-only diagnosis is
+  active. No complete linked Session acceptance is claimed.
+- Latest universal build `43317951167` at `b11b7ab` passed Swift typecheck but
+  failed the Claude fallback fixture. The pending runtime commit addresses both
+  authoritative provider-state and receipt-bearing Event checkpoint budgets,
+  with explicit ambiguity handling. A fresh final-source universal build and
+  downloaded artifact verification remain required. No accepted app download
+  exists for this feature yet.
+- Next: commit/push scoped runtime repair, verify fresh universal build, accept
+  Session backpressure diagnosis and complete hosted linkage, then verify final
+  ZIP/source/architectures/minimum OS/signatures and packaged Programs evidence.
 
 ## Earlier overall acceptance notes
 
@@ -445,3 +450,60 @@ dispatch or app manipulation was performed.
 - Pure presentation-helper actor repair: portable pre-commit check passed
   **757/0/7**, 256.49 seconds, with matching source and preservation hashes.
   The native compiler must verify the one-declaration change on the next run.
+
+## Follow-up event and review repairs
+
+- Provider-state review found no production logic defect, but requested actual
+  pending-checkpoint retirement coverage and use of the production Register
+  caller in the transport test. Its nested artifact document hash finding is
+  corrected locally, with the outer evidence hash recomputed.
+- Claude fallback diagnosis identifies an ordinary receipt-bearing Event that
+  can outlive its 150 ms transport while waiting for a two-second checkpoint.
+  Main authorized a narrow existing-outer-budget class for receipt-bearing
+  hook Events, cancellation fences, and truthful ambiguous outcome handling;
+  cleanup/no-hook Event limits remain 150 ms. Luna is implementing this slice
+  and the two state-test coverage repairs. Native causation remains unproven.
+
+## Receipt-bearing Event completion (2026-11-13)
+
+- Receipt-bearing Events now carry the original monotonic caller deadline
+  through both transports. Desktop bounds the Session checkpoint and reserves
+  response time. An ambiguous post-send receipt becomes `Unknown`, with no
+  retry or unkeyed fallback. Definitive no-send/typed-invalid cases retain
+  fallback behavior. No-hook Events/cleanup stay at 150 ms and private socket
+  operations at 100 ms. The unknown tradeoff and proof limits are recorded.
+- Focused provider transport, real-PTY state/Event, route admission, and full
+  provider-hooks target pass (15/0/2). Four intended negative controls failed
+  and were restored. Production Register call-site coverage and actual queued
+  checkpoint retirement/public execute admission now close the earlier gaps.
+- Separate final Luna review and fresh aggregate scripts/check are running on
+  stable source, including the Ghostty existing-method compile repair and
+  nested review-pin correction. Commit/push and both native workflows follow
+  once these gates pass; no accepted app artifact exists yet.
+
+## Final portable check and Ghostty retry
+
+- Combined receipt-bearing Event, provider-state and Ghostty method/pin repairs
+  passed `scripts/check`: **759 passed, 0 failed, 7 ignored**, 282.22 seconds;
+  source fingerprints unchanged and unrelated preservation hashes matched.
+- The cohesive Ghostty close-owner and nested pin correction is pushed at
+  `9048d943eea63ff18218f0ba1b0dbfe158810ccf`. Hosted linkage with Session
+  runtime is dispatched again; no engine library rebuild was needed.
+- CLI/Desktop runtime repair remains uncommitted until final independent review
+  completes. Its full portable check is complete. Native final-source acceptance
+  and universal app artifact delivery are still pending.
+
+## Final review response classification
+
+- Independent review accepted deadline plumbing, queue/cancellation boundaries,
+  authentication, prior test-gap repairs and Ghostty method/pins, but found
+  malformed success data and post-apply timeout could select fallback. Parent
+  fixed both small classification findings and extended the existing production
+  Adapter transport test. Both intended pre-fix failures and the final pass are
+  recorded. A stable full check is rerunning before the runtime commit.
+- Hosted Ghostty run `43335306931` passed ARM engine tests and the new engine
+  OSC 7501 test, then failed two existing Session backpressure fixtures. The
+  new linked Session/PTY 7501 acceptance test and Intel compile were not reached.
+  Bounded read-only diagnosis is active; actual logs/receipt are retained at
+  `/tmp/zmux-osc7501-linkage-43335306931`. This is partial evidence, not linkage
+  or application acceptance.

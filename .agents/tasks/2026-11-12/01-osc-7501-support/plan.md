@@ -78,3 +78,13 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/route-final-admission-recheck.md](references/route-final-admission-recheck.md) — final scoped source review and acceptance evidence.
 - [Protocol specification](https://superlogical.com/rex/docs/build/program-status) — revision 0.4, dated 2026-10-10.
 - [Existing provider task](../../2026-11-01/01-live-agent-sidebar/plan.md) — adapter and alert guarantees to preserve.
+
+- [references/ghostty-produced-artifact-review.md](references/ghostty-produced-artifact-review.md) — actual archive, library bytes, provenance and opt-in linkage acceptance.
+- [references/macos-attachment-diagnosis.md](references/macos-attachment-diagnosis.md) — post-spawn observation RPC budget mismatch and hosted proof limits.
+- [references/provider-state-budget-repair.md](references/provider-state-budget-repair.md) — bounded authoritative state RPCs, owner regressions and proof limits.
+- [references/provider-state-budget-recheck.md](references/provider-state-budget-recheck.md) — independent source acceptance, test coverage gaps and nested review-pin correction.
+- [references/macos-claude-fallback-diagnosis.md](references/macos-claude-fallback-diagnosis.md) — receipt-bearing Event timeout and duplicate fallback interleaving.
+- [references/ghostty-linkage-compile-repair.md](references/ghostty-linkage-compile-repair.md) — hosted optional-owner compiler failure, existing-method repair and scoped compile proof.
+- [references/claude-checkpoint-event-repair.md](references/claude-checkpoint-event-repair.md) — receipt-backed Event deadlines, unknown-outcome fallback policy and production-owner regressions.
+- [references/claude-checkpoint-event-recheck.md](references/claude-checkpoint-event-recheck.md) — independent acceptance of deadline/queue changes and two response-classification findings.
+- [references/claude-receipt-classification-repair.md](references/claude-receipt-classification-repair.md) — parent resolution, malformed/post-apply transport regressions and proof limits.

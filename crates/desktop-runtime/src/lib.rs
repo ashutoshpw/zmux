@@ -593,7 +593,8 @@ struct Envelope {
 }
 
 const PROGRAM_STATUS_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(2);
-const PROVIDER_ROUTE_RESPONSE_MARGIN: Duration = Duration::from_millis(250);
+const PROVIDER_CHECKPOINT_RESPONSE_MARGIN: Duration = Duration::from_millis(250);
+const HOOK_EVENT_RESPONSE_MARGIN: Duration = Duration::from_millis(500);
 
 enum PendingProgramStatusWork {
     LocalCommand(Box<Envelope>),
@@ -601,6 +602,87 @@ enum PendingProgramStatusWork {
         binding: remote_agent_lifecycle::Binding,
         frame: zmux_remote_runtime::agent_lifecycle::Frame,
     },
+}
+
+fn local_lifecycle_action(command: &Command) -> Option<&agent_lifecycle::Action> {
+    match command {
+        Command::AgentLifecycle { request }
+        | Command::AgentLifecycleCheckpointed { request, .. } => Some(&request.action),
+        _ => None,
+    }
+}
+
+fn provider_checkpoint_admission_action(action: &agent_lifecycle::Action) -> bool {
+    matches!(
+        action,
+        agent_lifecycle::Action::Register { .. }
+            | agent_lifecycle::Action::ProviderObservation { .. }
+            | agent_lifecycle::Action::ProviderRouteStarted { .. }
+            | agent_lifecycle::Action::Event {
+                hook_id: Some(_),
+                ..
+            }
+    )
+}
+
+fn receipt_bearing_hook_event(action: &agent_lifecycle::Action) -> bool {
+    matches!(
+        action,
+        agent_lifecycle::Action::Event {
+            hook_id: Some(_),
+            ..
+        }
+    )
+}
+
+fn checkpoint_response_margin(action: &agent_lifecycle::Action) -> Duration {
+    if receipt_bearing_hook_event(action) {
+        HOOK_EVENT_RESPONSE_MARGIN
+    } else {
+        PROVIDER_CHECKPOINT_RESPONSE_MARGIN
+    }
+}
+
+fn authoritative_provider_state_action(action: &agent_lifecycle::Action) -> bool {
+    matches!(
+        action,
+        agent_lifecycle::Action::Register { .. }
+            | agent_lifecycle::Action::ProviderObservation { .. }
+            | agent_lifecycle::Action::Event {
+                hook_id: Some(_),
+                ..
+            }
+    )
+}
+
+fn checkpoint_admission_expired(envelope: &Envelope) -> bool {
+    local_lifecycle_action(&envelope.request.payload).is_some_and(|action| {
+        provider_checkpoint_admission_action(action)
+            && envelope.reply_deadline.is_some_and(|deadline| {
+                Instant::now()
+                    >= deadline
+                        .checked_sub(checkpoint_response_margin(action))
+                        .unwrap_or(deadline)
+            })
+    })
+}
+
+fn checkpoint_work_cancelled(work: &PendingProgramStatusWork) -> bool {
+    matches!(
+        work,
+        PendingProgramStatusWork::LocalCommand(envelope)
+            if envelope.cancellation.as_ref().is_some_and(|cancelled| {
+                cancelled.load(Ordering::Acquire)
+            })
+    )
+}
+
+fn checkpoint_work_expired(work: &PendingProgramStatusWork) -> bool {
+    matches!(
+        work,
+        PendingProgramStatusWork::LocalCommand(envelope)
+            if checkpoint_admission_expired(envelope)
+    )
 }
 
 struct PendingProgramStatusCheckpoint {
@@ -911,28 +993,45 @@ impl Desktop {
         timeout: Duration,
         authorization: control_policy::ControlAdmission,
     ) -> Result<Execution, DesktopError> {
+        let deadline_guarded_checkpoint = local_lifecycle_action(&request.payload)
+            .is_some_and(provider_checkpoint_admission_action);
+        let reply_deadline = deadline_guarded_checkpoint.then(|| Instant::now() + timeout);
+        self.execute_authorized_inner(request, timeout, reply_deadline, authorization)
+    }
+
+    pub(crate) fn execute_authorized_until(
+        &self,
+        request: Request,
+        deadline: Instant,
+        authorization: control_policy::ControlAdmission,
+    ) -> Result<Execution, DesktopError> {
+        let deadline_guarded_checkpoint = local_lifecycle_action(&request.payload)
+            .is_some_and(provider_checkpoint_admission_action);
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        let reply_deadline = deadline_guarded_checkpoint.then_some(deadline);
+        self.execute_authorized_inner(request, timeout, reply_deadline, authorization)
+    }
+
+    fn execute_authorized_inner(
+        &self,
+        request: Request,
+        timeout: Duration,
+        reply_deadline: Option<Instant>,
+        authorization: control_policy::ControlAdmission,
+    ) -> Result<Execution, DesktopError> {
         self.validate(&request)?;
-        let route_start = matches!(
-            &request.payload,
-            Command::AgentLifecycle {
-                request: agent_lifecycle::Request {
-                    action: agent_lifecycle::Action::ProviderRouteStarted { .. },
-                    ..
-                }
-            }
-        );
-        let route_deadline = route_start.then(|| Instant::now() + timeout);
-        let cancellation = route_start.then(|| Arc::new(AtomicBool::new(false)));
+        let deadline_guarded_checkpoint = reply_deadline.is_some();
+        let cancellation = deadline_guarded_checkpoint.then(|| Arc::new(AtomicBool::new(false)));
         let (sender, receiver) = mpsc::sync_channel(1);
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
             cancellation: cancellation.clone(),
             authorization: Some(authorization),
-            reply_deadline: route_deadline,
+            reply_deadline,
             shared_terminal: None,
         })?;
-        let acknowledgement_timeout = route_deadline.map_or(timeout, |deadline| {
+        let acknowledgement_timeout = reply_deadline.map_or(timeout, |deadline| {
             deadline.saturating_duration_since(Instant::now())
         });
         receiver
@@ -2581,36 +2680,10 @@ impl Worker {
                 index += 1;
                 continue;
             }
-            let caller_cancelled = matches!(
-                &self.pending_program_status_checkpoints[index].work,
-                PendingProgramStatusWork::LocalCommand(envelope)
-                    if envelope.cancellation.as_ref().is_some_and(|cancelled| {
-                        cancelled.load(Ordering::Acquire)
-                    })
-            );
-            let route_checkpoint_expired =
-                match &self.pending_program_status_checkpoints[index].work {
-                    PendingProgramStatusWork::LocalCommand(envelope)
-                        if matches!(
-                            &envelope.request.payload,
-                            Command::AgentLifecycle {
-                                request: agent_lifecycle::Request {
-                                    action: agent_lifecycle::Action::ProviderRouteStarted { .. },
-                                    ..
-                                }
-                            }
-                        ) =>
-                    {
-                        envelope.reply_deadline.is_some_and(|command_deadline| {
-                            Instant::now()
-                                >= command_deadline
-                                    .checked_sub(PROVIDER_ROUTE_RESPONSE_MARGIN)
-                                    .unwrap_or(command_deadline)
-                        })
-                    }
-                    _ => false,
-                };
-            if caller_cancelled || route_checkpoint_expired {
+            let work = &self.pending_program_status_checkpoints[index].work;
+            let caller_cancelled = checkpoint_work_cancelled(work);
+            let checkpoint_expired = checkpoint_work_expired(work);
+            if caller_cancelled || checkpoint_expired {
                 let pending = self
                     .pending_program_status_checkpoints
                     .remove(index)
@@ -2620,7 +2693,7 @@ impl Worker {
                 if !caller_cancelled {
                     self.resume_checkpoint_work(
                         pending.work,
-                        Err("provider route checkpoint exceeded its admission deadline".into()),
+                        Err("provider checkpoint exceeded its admission deadline".into()),
                     );
                 }
                 dirty = true;
@@ -2633,6 +2706,25 @@ impl Worker {
                 index += 1;
                 continue;
             };
+            let work = &self.pending_program_status_checkpoints[index].work;
+            let caller_cancelled = checkpoint_work_cancelled(work);
+            let checkpoint_expired = checkpoint_work_expired(work);
+            if caller_cancelled || checkpoint_expired {
+                let pending = self
+                    .pending_program_status_checkpoints
+                    .remove(index)
+                    .expect("completed checkpoint index remains valid");
+                pending.checkpoint.cancel();
+                self.program_status.end_provider_checkpoint(target);
+                if !caller_cancelled {
+                    self.resume_checkpoint_work(
+                        pending.work,
+                        Err("provider checkpoint exceeded its admission deadline".into()),
+                    );
+                }
+                dirty = true;
+                continue;
+            }
             let pending = self
                 .pending_program_status_checkpoints
                 .remove(index)
@@ -2979,15 +3071,31 @@ impl Worker {
             },
             _ => None,
         };
-        let route_cancellation = envelope.cancellation.clone();
-        let route_deadline = envelope.reply_deadline;
+        let operation_cancellation = envelope.cancellation.clone();
+        let operation_deadline = envelope.reply_deadline;
         let route_expired = || {
             started_route.is_some()
-                && (route_cancellation
+                && (operation_cancellation
                     .as_ref()
                     .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
-                    || route_deadline.is_some_and(|deadline| Instant::now() >= deadline))
+                    || operation_deadline.is_some_and(|deadline| Instant::now() >= deadline))
         };
+        let lifecycle_action = local_lifecycle_action(&envelope.request.payload);
+        let provider_state_action =
+            lifecycle_action.is_some_and(authoritative_provider_state_action);
+        let response_margin = lifecycle_action
+            .map(checkpoint_response_margin)
+            .unwrap_or(PROVIDER_CHECKPOINT_RESPONSE_MARGIN);
+        let provider_state_expired = || {
+            provider_state_action
+                && (operation_cancellation
+                    .as_ref()
+                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+                    || operation_deadline.is_some_and(|deadline| {
+                        Instant::now() >= deadline.checked_sub(response_margin).unwrap_or(deadline)
+                    }))
+        };
+        let caller_expired = || route_expired() || provider_state_expired();
         let checkpoint_request = match &envelope.request.payload {
             Command::AgentLifecycle { request }
                 if matches!(
@@ -3004,14 +3112,15 @@ impl Worker {
         };
         if let Some(request) = checkpoint_request {
             let checkpoint_deadline = Instant::now() + PROGRAM_STATUS_CHECKPOINT_TIMEOUT;
-            let checkpoint_deadline = match (&request.action, envelope.reply_deadline) {
-                (agent_lifecycle::Action::ProviderRouteStarted { .. }, Some(command_deadline)) => {
-                    checkpoint_deadline.min(
-                        command_deadline
-                            .checked_sub(PROVIDER_ROUTE_RESPONSE_MARGIN)
-                            .unwrap_or(command_deadline),
-                    )
-                }
+            let checkpoint_deadline = match (
+                provider_checkpoint_admission_action(&request.action),
+                envelope.reply_deadline,
+            ) {
+                (true, Some(command_deadline)) => checkpoint_deadline.min(
+                    command_deadline
+                        .checked_sub(checkpoint_response_margin(&request.action))
+                        .unwrap_or(command_deadline),
+                ),
                 _ => checkpoint_deadline,
             };
             let target = match &request.action {
@@ -3131,7 +3240,7 @@ impl Worker {
             _ => Err(TerminalSharingError::Unavailable.into()),
         };
         let mut result = match shared_terminal_check {
-            _ if route_expired() => Err(DesktopError::Timeout),
+            _ if caller_expired() => Err(DesktopError::Timeout),
             Err(error) => Err(error),
             Ok(()) => match guard {
                 _ if self.shared.stop.load(Ordering::Acquire)
@@ -3174,9 +3283,12 @@ impl Worker {
             },
         };
         // A ready checkpoint can outlive its caller while this command is
-        // scheduled. Retire only the exact unconfirmed reservation on expiry.
-        if route_expired() {
-            self.cancel_unacknowledged_provider_route(started_route);
+        // scheduled. Retire only the exact unconfirmed route reservation; all
+        // provider state mutations are fenced before their owner is entered.
+        if caller_expired() {
+            if route_expired() {
+                self.cancel_unacknowledged_provider_route(started_route);
+            }
             self.agent_lifecycle_result = None;
             result = Err(DesktopError::Timeout);
         }
@@ -3228,8 +3340,10 @@ impl Worker {
                 (workspaces, panes, surfaces)
             })
             .unwrap_or_default();
-        if route_expired() {
-            self.cancel_unacknowledged_provider_route(started_route);
+        if caller_expired() {
+            if route_expired() {
+                self.cancel_unacknowledged_provider_route(started_route);
+            }
             self.agent_lifecycle_result = None;
             result = Err(DesktopError::Timeout);
             self.last_error = Some(DesktopError::Timeout.to_string());

@@ -313,11 +313,14 @@ fn execute_lifecycle_on_worker(
 ) -> Execution {
     let checkpoint_expected = matches!(
         &request.action,
-        agent_lifecycle::Action::ProviderRouteStarted { .. }
+        agent_lifecycle::Action::Register { .. }
+            | agent_lifecycle::Action::ProviderObservation { .. }
+            | agent_lifecycle::Action::ProviderRouteStarted { .. }
     );
     let checkpoint_should_be_pending =
         checkpoint_expected && reply_deadline.is_none_or(|deadline| deadline > Instant::now());
     let (sender, receiver) = mpsc::sync_channel(1);
+    let cancellation = reply_deadline.map(|_| Arc::new(AtomicBool::new(false)));
     worker.command(Envelope {
         request: Request {
             version: 1,
@@ -325,7 +328,7 @@ fn execute_lifecycle_on_worker(
             payload: Command::AgentLifecycle { request },
         },
         acknowledgement: Some(sender),
-        cancellation: None,
+        cancellation,
         authorization: None,
         reply_deadline,
         shared_terminal: None,
@@ -333,7 +336,7 @@ fn execute_lifecycle_on_worker(
     if checkpoint_should_be_pending {
         assert!(
             receiver.try_recv().is_err(),
-            "route start waits for worker checkpoint"
+            "authoritative provider lifecycle request waits for worker checkpoint"
         );
     }
     if !first_poll_delay.is_zero() {
@@ -352,6 +355,547 @@ fn execute_lifecycle_on_worker(
             "status checkpoint did not complete"
         );
         thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let model = worker.model.snapshot();
+    let surface = model.workspaces[0].root.panes()[0].selected().clone();
+    let session_id = surface.session_id.unwrap();
+    let session = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read -r line; printf 'PROVIDER_STATE_CHECKPOINT\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_1\n'; sleep 2; cat >/dev/null & reader=$!; sleep 0.2; kill "$reader"; wait "$reader" 2>/dev/null; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_1\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_2\n'; sleep 1; cat >/dev/null & reader=$!; sleep 0.2; kill "$reader"; wait "$reader" 2>/dev/null; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_2\n'; IFS= read -r line"#.into(),
+        ],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let initial = session.snapshot().unwrap();
+    worker.slots.insert(
+        session_id,
+        Slot {
+            cancellation: Arc::new(AtomicBool::new(false)),
+            launch_id: 1,
+            session: Some(session),
+            connection: None,
+            remote_lifecycle: None,
+            cached: Some(initial),
+            starting: false,
+            reconnectable: false,
+            failure: None,
+            resize: None,
+            last_notice: 0,
+        },
+    );
+    let wait_for_live_snapshot = |worker: &Worker, expected: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(snapshot) = worker.live_terminal_snapshot(session_id)
+                && snapshot.viewport.contents.contains(expected)
+            {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "PTY did not print {expected}");
+            thread::sleep(Duration::from_millis(2));
+        }
+    };
+    wait_for_live_snapshot(&worker, "PROVIDER_STATE_READY");
+    worker
+        .live_session(session_id)
+        .unwrap()
+        .send_input(b"advance-provider-checkpoint\n")
+        .unwrap();
+    let live = wait_for_live_snapshot(&worker, "PROVIDER_STATE_CHECKPOINT");
+    assert_eq!(live.state, zmux_session_runtime::State::Running);
+
+    let target = agent_lifecycle::Target {
+        identity_namespace: model.identity_namespace,
+        surface_id: surface.id,
+        surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+        session_id,
+    };
+    let claude_runtime = Uuid::new_v4();
+    let claude_generation = Uuid::new_v4();
+    let claude_provider_session = Uuid::new_v4();
+    let make_registration = || agent_lifecycle::Request {
+        request_id: Uuid::new_v4(),
+        action: agent_lifecycle::Action::Register {
+            target,
+            provider: agent_lifecycle::Provider::ClaudeLocal,
+            runtime_id: claude_runtime,
+            generation: claude_generation,
+            provider_session_id: claude_provider_session,
+        },
+    };
+    let make_observation = || agent_lifecycle::Request {
+        request_id: Uuid::new_v4(),
+        action: agent_lifecycle::Action::ProviderObservation {
+            target,
+            runtime_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            sequence: 1,
+            observation: zmux_remote_runtime::agent_lifecycle::ProviderLifecycleObservation {
+                provider: zmux_remote_runtime::agent_lifecycle::ProviderKind::Codex,
+                scope: zmux_remote_runtime::agent_lifecycle::ProviderScope::Root,
+                session_id: Uuid::new_v4().to_string(),
+                turn_id: Some("turn-1".into()),
+                state: zmux_remote_runtime::agent_lifecycle::ProviderState::Working,
+                transition: zmux_remote_runtime::agent_lifecycle::ProviderTransition::Snapshot,
+                marker: zmux_remote_runtime::agent_lifecycle::ProviderMarker::Baseline,
+            },
+        },
+    };
+    let identities = |worker: &Worker| {
+        worker
+            .agent_lifecycle
+            .snapshot(&model)
+            .into_iter()
+            .map(|agent| {
+                (
+                    agent.provider,
+                    agent.runtime_id,
+                    agent.generation,
+                    agent.provider_session_id,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let published_identities = |snapshot: &Snapshot| {
+        snapshot
+            .agent_lifecycle
+            .iter()
+            .map(|agent| {
+                (
+                    agent.provider,
+                    agent.runtime_id,
+                    agent.generation,
+                    agent.provider_session_id,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut hook_capability = None;
+    for (is_registration, request) in [(true, make_registration()), (false, make_observation())] {
+        let started = Instant::now();
+        let execution = execute_lifecycle_on_worker(
+            &mut worker,
+            request,
+            Some(Instant::now() + Duration::from_secs(2)),
+            Duration::from_millis(225),
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "provider state should wait beyond the 150 ms ordinary lifecycle cap"
+        );
+        execution.result.unwrap();
+        if is_registration {
+            hook_capability = execution
+                .agent_lifecycle_result
+                .and_then(|receipt| receipt.capability);
+        }
+    }
+    let hook_capability = hook_capability.expect("Claude registration returns a lifecycle cap");
+    assert_eq!(identities(&worker).len(), 2);
+    let admitted_identities = identities(&worker);
+
+    let prompt = agent_lifecycle::Request {
+        request_id: Uuid::new_v4(),
+        action: agent_lifecycle::Action::Event {
+            capability: hook_capability,
+            runtime_id: claude_runtime,
+            generation: claude_generation,
+            sequence: 1,
+            hook_id: None,
+            event: agent_lifecycle::Event::PromptSubmitted {
+                prompt_id: Uuid::new_v4(),
+            },
+        },
+    };
+    execute_lifecycle_on_worker(&mut worker, prompt, None, Duration::ZERO)
+        .result
+        .unwrap();
+    let make_hook_event = |hook_id| agent_lifecycle::Request {
+        request_id: Uuid::new_v4(),
+        action: agent_lifecycle::Action::Event {
+            capability: hook_capability,
+            runtime_id: claude_runtime,
+            generation: claude_generation,
+            sequence: 2,
+            hook_id: Some(hook_id),
+            event: agent_lifecycle::Event::NeedsUser,
+        },
+    };
+
+    let live_checkpoint = |worker: &Worker| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut checkpoint = worker
+            .live_session(session_id)
+            .unwrap()
+            .request_program_status_checkpoint(deadline)
+            .unwrap();
+        loop {
+            if let Some(result) = checkpoint.try_recv() {
+                let snapshot = result.unwrap();
+                assert!(
+                    snapshot
+                        .viewport
+                        .contents
+                        .contains("PROVIDER_STATE_CHECKPOINT")
+                );
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "real PTY checkpoint stalled");
+            thread::sleep(Duration::from_millis(2));
+        }
+    };
+    for (index, (registration, cancelled)) in
+        [(true, false), (true, true), (false, false), (false, true)]
+            .into_iter()
+            .enumerate()
+    {
+        let request = if registration {
+            make_registration()
+        } else {
+            make_observation()
+        };
+        let checkpoint = live_checkpoint(&worker);
+        worker.advance_checkpoint_snapshot(session_id, 1, &checkpoint);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        worker.command(Envelope {
+            request: Request {
+                version: 1,
+                request_id: 94 + index as u64,
+                payload: Command::AgentLifecycleCheckpointed {
+                    request,
+                    checkpoint: Ok(checkpoint),
+                },
+            },
+            acknowledgement: Some(sender),
+            cancellation: Some(Arc::new(AtomicBool::new(cancelled))),
+            authorization: None,
+            reply_deadline: Some(if cancelled {
+                Instant::now() + Duration::from_secs(2)
+            } else {
+                Instant::now() - Duration::from_millis(1)
+            }),
+            shared_terminal: None,
+        });
+        let execution = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            matches!(execution.result, Err(DesktopError::Timeout)),
+            "expired or cancelled authoritative provider state must not resume"
+        );
+        assert_eq!(identities(&worker), admitted_identities);
+    }
+
+    // Exercise the final owner expiry/cancellation fence with Event results
+    // from the same live PTY checkpoint path. Each acknowledgement is resumed
+    // after a real checkpoint snapshot has been obtained.
+    for (index, cancelled) in [false, true].into_iter().enumerate() {
+        let request = make_hook_event(Uuid::new_v4());
+        let checkpoint = live_checkpoint(&worker);
+        worker.advance_checkpoint_snapshot(session_id, 1, &checkpoint);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        worker.command(Envelope {
+            request: Request {
+                version: 1,
+                request_id: 98 + index as u64,
+                payload: Command::AgentLifecycleCheckpointed {
+                    request,
+                    checkpoint: Ok(checkpoint),
+                },
+            },
+            acknowledgement: Some(sender),
+            cancellation: Some(Arc::new(AtomicBool::new(cancelled))),
+            authorization: None,
+            reply_deadline: Some(if cancelled {
+                Instant::now() + Duration::from_secs(2)
+            } else {
+                Instant::now() - Duration::from_millis(1)
+            }),
+            shared_terminal: None,
+        });
+        let execution = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            matches!(execution.result, Err(DesktopError::Timeout)),
+            "expired or cancelled hook Event must not reach the lifecycle owner"
+        );
+        assert_eq!(identities(&worker), admitted_identities);
+        assert!(worker.agent_lifecycle.alert_events(&model).is_empty());
+    }
+
+    worker
+        .live_session(session_id)
+        .unwrap()
+        .send_input(b"hold-checkpoint-one\n")
+        .unwrap();
+    wait_for_live_snapshot(&worker, "PROVIDER_STATE_DRAIN_HOLD_1");
+    let blocked_input = vec![b'x'; zmux_session_runtime::INPUT_CHUNK_BYTES];
+    for _ in 0..12 {
+        worker
+            .live_session(session_id)
+            .unwrap()
+            .send_input(&blocked_input)
+            .unwrap();
+    }
+
+    let (sender, cancelled_receiver) = mpsc::sync_channel(1);
+    let cancellation = Arc::new(AtomicBool::new(false));
+    worker.command(Envelope {
+        request: Request {
+            version: 1,
+            request_id: 96,
+            payload: Command::AgentLifecycle {
+                request: make_hook_event(Uuid::new_v4()),
+            },
+        },
+        acknowledgement: Some(sender),
+        cancellation: Some(Arc::clone(&cancellation)),
+        authorization: None,
+        reply_deadline: Some(Instant::now() + Duration::from_secs(4)),
+        shared_terminal: None,
+    });
+    assert_eq!(
+        worker.pending_program_status_checkpoints.len(),
+        1,
+        "cancel control must observe an admitted real Session checkpoint"
+    );
+    cancellation.store(true, Ordering::Release);
+    worker.poll_program_status_checkpoints();
+    assert!(worker.pending_program_status_checkpoints.is_empty());
+    assert!(matches!(
+        cancelled_receiver.recv_timeout(Duration::from_millis(25)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+    assert_eq!(identities(&worker), admitted_identities);
+    assert!(worker.agent_lifecycle.alert_events(&model).is_empty());
+
+    let expiry = Instant::now() + Duration::from_secs(1);
+    let (sender, expired_receiver) = mpsc::sync_channel(1);
+    worker.command(Envelope {
+        request: Request {
+            version: 1,
+            request_id: 97,
+            payload: Command::AgentLifecycle {
+                request: make_hook_event(Uuid::new_v4()),
+            },
+        },
+        acknowledgement: Some(sender),
+        cancellation: Some(Arc::new(AtomicBool::new(false))),
+        authorization: None,
+        reply_deadline: Some(expiry),
+        shared_terminal: None,
+    });
+    assert_eq!(
+        worker.pending_program_status_checkpoints.len(),
+        1,
+        "expiry control must observe an admitted real Session checkpoint"
+    );
+    thread::sleep(Duration::from_millis(550));
+    worker.poll_program_status_checkpoints();
+    assert!(worker.pending_program_status_checkpoints.is_empty());
+    let expired = expired_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    assert!(matches!(expired.result, Err(DesktopError::Timeout)));
+    assert_eq!(identities(&worker), admitted_identities);
+    assert!(worker.agent_lifecycle.alert_events(&model).is_empty());
+
+    // Exercise the production execute_authorized timeout owner while a real
+    // Session checkpoint sits behind PTY writes. This must cancel before the
+    // delayed checkpoint can apply the Event.
+    worker.publish(false);
+    let shared = Arc::clone(&worker.shared);
+    let (sender, receiver) = mpsc::sync_channel(MAX_COMMANDS);
+    let worker_thread = thread::spawn(move || worker.run(receiver));
+    let desktop = Desktop {
+        sender,
+        shared,
+        worker: Mutex::new(Some(worker_thread)),
+    };
+    let gate = control_policy::ControlGate::new(control_policy::ControlPolicy::default());
+    let authorize = |request: &agent_lifecycle::Request| {
+        gate.admit(
+            control_policy::ControlOrigin::LocalOwner,
+            &crate::control::ControlCommand::AgentLifecycle {
+                request: request.clone(),
+            },
+            None,
+        )
+        .unwrap()
+    };
+    let request = make_hook_event(Uuid::new_v4());
+    let timeout = desktop.execute_authorized(
+        Request {
+            version: 1,
+            request_id: 95,
+            payload: Command::AgentLifecycle {
+                request: request.clone(),
+            },
+        },
+        Duration::from_millis(700),
+        authorize(&request),
+    );
+    match timeout {
+        Ok(execution) => assert!(matches!(execution.result, Err(DesktopError::Timeout))),
+        Err(error) => assert!(matches!(error, DesktopError::Timeout)),
+    }
+    let wait_for_desktop_output = |expected: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = desktop.snapshot().unwrap();
+            let found = snapshot.frames.iter().any(|frame| {
+                frame
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|terminal| terminal.viewport.contents.contains(expected))
+            });
+            if found {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "PTY did not print {expected}");
+            thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let drained = wait_for_desktop_output("PROVIDER_STATE_DRAINED_1");
+    assert_eq!(
+        published_identities(&drained),
+        admitted_identities,
+        "timed-out hook Event must not mutate provider state"
+    );
+    let late_event_deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < late_event_deadline {
+        let snapshot = desktop.snapshot().unwrap();
+        assert_eq!(
+            published_identities(&snapshot),
+            admitted_identities,
+            "expired checkpoint resumed the hook Event late"
+        );
+        assert!(
+            snapshot.agent_alert_events.is_empty(),
+            "expired hook Event published an alert after its caller stopped waiting"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    desktop
+        .submit(Request {
+            version: 1,
+            request_id: 98,
+            payload: Command::Input {
+                session_id,
+                text: "hold-checkpoint-two\n".into(),
+            },
+        })
+        .unwrap();
+    wait_for_desktop_output("PROVIDER_STATE_DRAIN_HOLD_2");
+    let blocked_text = "x".repeat(zmux_session_runtime::INPUT_CHUNK_BYTES);
+    for index in 0..12 {
+        desktop
+            .submit(Request {
+                version: 1,
+                request_id: 100 + index,
+                payload: Command::Input {
+                    session_id,
+                    text: blocked_text.clone(),
+                },
+            })
+            .unwrap();
+    }
+    let observation = make_observation();
+    let observation_runtime = match &observation.action {
+        agent_lifecycle::Action::ProviderObservation { runtime_id, .. } => *runtime_id,
+        _ => unreachable!("provider observation fixture keeps its action type"),
+    };
+    let observation_admission = authorize(&observation);
+    let observation_desktop = &desktop;
+    let (observation_elapsed, observation_execution, event_elapsed, event_execution) =
+        thread::scope(|scope| {
+            let observation_call = scope.spawn(move || {
+                let started = Instant::now();
+                let result = observation_desktop.execute_authorized(
+                    Request {
+                        version: 1,
+                        request_id: 121,
+                        payload: Command::AgentLifecycle {
+                            request: observation,
+                        },
+                    },
+                    Duration::from_millis(2700),
+                    observation_admission,
+                );
+                (started.elapsed(), result)
+            });
+            let request = make_hook_event(Uuid::new_v4());
+            let started = Instant::now();
+            let result = desktop.execute_authorized(
+                Request {
+                    version: 1,
+                    request_id: 120,
+                    payload: Command::AgentLifecycle {
+                        request: request.clone(),
+                    },
+                },
+                Duration::from_millis(2700),
+                authorize(&request),
+            );
+            let event_elapsed = started.elapsed();
+            let (observation_elapsed, observation_result) = observation_call.join().unwrap();
+            (
+                observation_elapsed,
+                observation_result.unwrap(),
+                event_elapsed,
+                result.unwrap(),
+            )
+        });
+    assert!(
+        observation_elapsed >= Duration::from_millis(300),
+        "provider observation must wait for its delayed real Session checkpoint"
+    );
+    observation_execution.result.unwrap();
+    assert!(
+        observation_execution
+            .snapshot
+            .agent_lifecycle
+            .iter()
+            .any(|agent| {
+                agent.runtime_id == observation_runtime
+                    && agent.provider == agent_lifecycle::Provider::CodexLocal
+                    && agent.activity == agent_lifecycle::Activity::Working
+            })
+    );
+    assert!(
+        event_elapsed >= Duration::from_millis(300),
+        "receipt-bearing Event must wait for the delayed real Session checkpoint"
+    );
+    event_execution.result.unwrap();
+    assert_eq!(
+        event_execution
+            .agent_lifecycle_result
+            .expect("hook Event receipt")
+            .hook_disposition,
+        agent_lifecycle::HookDisposition::AlertCovered
+    );
+    wait_for_desktop_output("PROVIDER_STATE_DRAINED_2");
+    let final_snapshot = desktop.snapshot().unwrap();
+    assert_eq!(
+        final_snapshot
+            .agent_alert_events
+            .iter()
+            .filter(|event| event.kind == agent_lifecycle::AlertKind::NeedsUser)
+            .count(),
+        1,
+        "the delayed committed hook Event publishes one alert"
+    );
+
+    desktop.shared.stop.store(true, Ordering::Release);
+    if let Some(worker) = desktop.worker.lock().unwrap().take() {
+        worker.join().unwrap();
     }
 }
 

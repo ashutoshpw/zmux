@@ -35,3 +35,16 @@ producer, actual callback execution and app acceptance remain hosted gates.
 The detailed latest fingerprint receipt is `/tmp/zmux-osc7501-final-check.json`;
 previous successful source receipts are archived as `check-round4` through
 `check-round7`. Final source commit attribution follows in task status.
+
+## 2026-11-13 final receipt-bearing Event repair
+
+`RUST_TEST_THREADS=2 scripts/check` passed **759/0/7** in 282.22 seconds. The
+receipt and log are `/tmp/zmux-osc7501-final-check.{json,log}`; the previous
+759/0/7 provider-state-only receipt is archived as `check-round10`. This run
+includes the absolute receipt-Event control path, unknown outcome handling,
+stronger real-PTY/public-execute tests, and the Ghostty existing-method repair.
+Runtime/tooling fingerprints remained unchanged; unrelated work matched its
+preservation ledger. This is local source validation, not macOS/linked execution
+or packaged application acceptance.
+
+Final parent response-classification repair recheck: **759/0/7** in 277.19 seconds, unchanged source fingerprints and matching unrelated preservation hashes. This supersedes the previous local receipt for the final runtime slice. Hosted gates remain separate.

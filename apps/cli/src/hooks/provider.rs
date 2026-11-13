@@ -854,12 +854,13 @@ fn submit_observation(
     sequence: u64,
     observation: ProviderLifecycleObservation,
 ) -> Result<(), CliError> {
+    let deadline = Instant::now() + options.timeout.min(EVENT_BUDGET);
     observation
         .validate()
         .map_err(|_| CliError("provider observation failed contract validation".into()))?;
-    let response = lifecycle_operation(
+    let response = authoritative_provider_state_operation(
         options,
-        Instant::now() + options.timeout.min(LIFECYCLE_BUDGET),
+        deadline,
         LifecycleRequest {
             request_id: Uuid::new_v4(),
             action: LifecycleAction::ProviderObservation {
@@ -1161,6 +1162,306 @@ mod tests {
             );
         }
         server.join().unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn provider_state_and_receipt_event_transport_keep_their_owner_budgets() {
+        // This Unix-socket peer exercises the production Adapter call sites and
+        // transport phase classification. It does not stand in for Desktop
+        // admission or Session checkpointing.
+        let directory = Path::new("/tmp").canonicalize().unwrap().join(format!(
+            "zprovider-state-budget-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let socket = directory.join("control.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let response_delay = Duration::from_millis(250);
+        let server = thread::spawn(move || {
+            let capability = Uuid::new_v4();
+            for (index, expected) in [
+                "register",
+                "provider_observation",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+                "event",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).unwrap();
+                let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+                stream.read_exact(&mut bytes).unwrap();
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(request["command"]["method"], "agent_lifecycle");
+                let action = &request["command"]["request"]["action"];
+                assert_eq!(action["action"], expected);
+                match index {
+                    0 => assert!(request.get("deadline_monotonic_ns").is_none()),
+                    2 | 4..=11 => {
+                        assert!(action["hook_id"].as_str().is_some());
+                        assert!(request["deadline_monotonic_ns"].as_u64().is_some());
+                    }
+                    3 => {
+                        assert!(action["hook_id"].is_null());
+                        assert!(request.get("deadline_monotonic_ns").is_none());
+                    }
+                    _ => {}
+                }
+                if index == 11 {
+                    // Consume the request and drop the reply. The client cannot
+                    // know whether this owner committed, so it must not retry or
+                    // choose a fallback based on an invented receipt.
+                    return true;
+                }
+                if index < 4 {
+                    thread::sleep(response_delay);
+                }
+                let result = match index {
+                    0 => json!({"accepted": true, "capability": capability}),
+                    2 | 3 => {
+                        json!({"accepted": true, "hook_disposition": "alert_covered"})
+                    }
+                    4 => json!({"accepted": false}),
+                    5 => json!({}),
+                    6 => json!({"accepted": "true", "hook_disposition": "not_handled"}),
+                    9 => json!({"accepted": true, "hook_disposition": "not_handled"}),
+                    _ => json!({"accepted": true}),
+                };
+                let mut response = json!({
+                    "version": CONTROL_VERSION,
+                    "request_id": request["request_id"],
+                    "ok": true,
+                    "result": result
+                });
+                if matches!(index, 7 | 8 | 10) {
+                    response["ok"] = json!(false);
+                    response["result"] = Value::Null;
+                    response["error"] = json!({
+                        "code": match index { 7 => "command_rejected", 8 => "outcome_unknown", _ => "unauthorized" },
+                        "message": "event may have committed before its response cutoff"
+                    });
+                }
+                let response = serde_json::to_vec(&response).unwrap();
+                let _ = stream.write_all(&(response.len() as u32).to_be_bytes());
+                let _ = stream.write_all(&response);
+            }
+            false
+        });
+        let options = ClientOptions {
+            socket,
+            timeout: Duration::from_secs(1),
+            password: None,
+        };
+        let route = Route {
+            namespace: Uuid::new_v4(),
+            surface: Uuid::new_v4(),
+            surface_id: SurfaceId(9),
+            session: 11,
+            terminal: ProcessIdentity {
+                pid: 13,
+                uid: 17,
+                parent_pid: 19,
+                start: [23, 29],
+                boot: "fixture".into(),
+                executable: PathBuf::from("/bin/sh"),
+            },
+        };
+        let runtime_id = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let provider_session_id = Uuid::new_v4();
+        let installation: plugin::Installation = serde_json::from_value(json!({
+            "generation": Uuid::new_v4(),
+            "adapter": {
+                "path": "/tmp/zmux-adapter-fixture",
+                "sha256": "fixture",
+                "identity": {"device": 0, "inode": 0},
+                "size": 0,
+                "modified": [0, 0]
+            },
+            "provider": {
+                "path": "/tmp/claude-fixture",
+                "sha256": "fixture",
+                "identity": {"device": 0, "inode": 0},
+                "size": 0,
+                "modified": [0, 0]
+            },
+            "provider_version": "2.1.301",
+            "files": {
+                "manifest": {"device": 0, "inode": 0},
+                "hooks": {"device": 0, "inode": 0},
+                "owner": {"device": 0, "inode": 0},
+                "runtime_lock": {"device": 0, "inode": 0}
+            }
+        }))
+        .unwrap();
+        let mut adapter = Adapter {
+            options: &options,
+            directory: &directory,
+            installation,
+            route: route.clone(),
+            root_session: provider_session_id.to_string(),
+            runtime: runtime_id,
+            generation,
+            provider: route.terminal.clone(),
+            registration: None,
+            retirement: None,
+            lifecycle: None,
+            cleanup_deadline: None,
+            held: false,
+            disabled: false,
+            startup_warning_emitted: false,
+            prompts: HashSet::new(),
+            inbox_enabled: false,
+        };
+        let started = Instant::now();
+        adapter
+            .register_lifecycle(started + options.timeout)
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+
+        let observation = ProviderLifecycleObservation {
+            provider: ProviderKind::Codex,
+            scope: ProviderScope::Root,
+            session_id: "codex-session".into(),
+            turn_id: Some("turn-1".into()),
+            state: zmux_remote_runtime::agent_lifecycle::ProviderState::Working,
+            transition: zmux_remote_runtime::agent_lifecycle::ProviderTransition::Snapshot,
+            marker: zmux_remote_runtime::agent_lifecycle::ProviderMarker::Baseline,
+        };
+        let started = Instant::now();
+        submit_observation(&options, &route, runtime_id, generation, 1, observation).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+
+        let started = Instant::now();
+        let receipt = adapter
+            .lifecycle_event(
+                LifecycleEvent::NeedsUser,
+                Some(Uuid::new_v4()),
+                started + EVENT_BUDGET,
+            )
+            .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        assert_eq!(receipt, HookOutcome::Receipt(HookDisposition::AlertCovered));
+
+        let ordinary_started = Instant::now();
+        assert!(
+            adapter
+                .lifecycle_event(
+                    LifecycleEvent::Resumed,
+                    None,
+                    Instant::now() + options.timeout,
+                )
+                .is_err()
+        );
+        assert!(
+            ordinary_started.elapsed() >= Duration::from_millis(120)
+                && ordinary_started.elapsed() < Duration::from_millis(240),
+            "no-hook lifecycle Events keep the 150 ms cap"
+        );
+
+        for case in [
+            "false accepted",
+            "missing accepted",
+            "invalid accepted",
+            "post-apply rejection",
+            "unknown outcome",
+        ] {
+            let outcome = adapter
+                .lifecycle_event(
+                    LifecycleEvent::NeedsUser,
+                    Some(Uuid::new_v4()),
+                    Instant::now() + EVENT_BUDGET,
+                )
+                .unwrap();
+            assert_eq!(
+                outcome,
+                HookOutcome::Unknown,
+                "{case} cannot prove non-commit"
+            );
+            assert_eq!(
+                fallback_for_outcome(
+                    &Ok(outcome),
+                    Some("attention_silent"),
+                    Some("attention_silent"),
+                    false
+                ),
+                None
+            );
+        }
+        let not_handled = adapter
+            .lifecycle_event(
+                LifecycleEvent::NeedsUser,
+                Some(Uuid::new_v4()),
+                Instant::now() + EVENT_BUDGET,
+            )
+            .unwrap();
+        assert_eq!(
+            not_handled,
+            HookOutcome::Receipt(HookDisposition::NotHandled)
+        );
+        assert_eq!(
+            fallback_for_outcome(
+                &Ok(not_handled),
+                Some("attention_silent"),
+                Some("attention_silent"),
+                false
+            ),
+            Some("attention_silent")
+        );
+
+        let denied = adapter.lifecycle_event(
+            LifecycleEvent::NeedsUser,
+            Some(Uuid::new_v4()),
+            Instant::now() + EVENT_BUDGET,
+        );
+        assert!(denied.is_err());
+        assert_eq!(
+            fallback_for_outcome(
+                &denied,
+                Some("attention_silent"),
+                Some("attention_silent"),
+                false
+            ),
+            Some("attention_silent"),
+            "a definitive authorization rejection retains fallback"
+        );
+
+        let lost_reply = adapter
+            .lifecycle_event(
+                LifecycleEvent::NeedsUser,
+                Some(Uuid::new_v4()),
+                Instant::now() + EVENT_BUDGET,
+            )
+            .unwrap();
+        assert_eq!(lost_reply, HookOutcome::Unknown);
+        assert_eq!(
+            fallback_for_outcome(
+                &Ok(lost_reply),
+                Some("attention_silent"),
+                Some("attention_silent"),
+                false,
+            ),
+            None,
+            "a post-send receipt loss must not create a duplicate fallback"
+        );
+
+        assert!(
+            server.join().unwrap(),
+            "lost-reply request was not consumed"
+        );
+        adapter.lifecycle = None;
+        drop(adapter);
         fs::remove_dir_all(directory).unwrap();
     }
 
