@@ -11,7 +11,7 @@
   "darwin": {
     "producer_sha256": "e68fd9637da96fd89c710cd525f4185fc3d0718438b99c12c41a11c3f0a2cfcc",
     "library_recipe_sha256": "6c80d3798197d5c014f8962ab2a79306a938aba399343ad32df1c6b9cec99cc8",
-    "independent_review_sha256": "d93863dea15ad80f36b9ae6701f1f8192003b0219fd6c7c1667e152d71ad0064",
+    "independent_review_sha256": "998fe58137318448bd3111a31ee7dbbf20c3b1898c242a2abf26321ce47a3096",
     "independent_review_path": "evidence/ghostty-7501-v1-independent-review.json",
     "source_sha": "7bf0864f9155384684f8fe92be8e9c547fdd9add",
     "libraries": {

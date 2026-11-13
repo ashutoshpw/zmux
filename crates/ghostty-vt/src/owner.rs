@@ -481,7 +481,7 @@ impl Engine {
         // Closing only updates committed Rust metadata. Session shutdown aborts
         // the C engine first; that permanent failure must still allow clearing
         // records without accessing the engine or publishing a cancelled batch.
-        self.state.program_status.terminal_closed_snapshot()
+        self.state.terminal_closed_snapshot()
     }
 
     /// Caller must first finish every causal reply's physical PTY write, preserving
