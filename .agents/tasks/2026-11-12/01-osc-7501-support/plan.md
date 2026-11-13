@@ -122,3 +122,5 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-schedule-receipt-evidence-recheck.md](references/native-schedule-receipt-evidence-recheck.md) — scoped diagnostics acceptance and repaired bounded-read P3.
 - [references/hosted-final-9f2f13c.md](references/hosted-final-9f2f13c.md) — Foundation and schedule receipt pass; expanded workspace drag viewport blocked final native delivery.
 - [references/workspace-drag-viewport-repair.md](references/workspace-drag-viewport-repair.md) — fixture honors captured AppKit minimum while retaining real overflow, scroll and drag invariants.
+- [references/hosted-final-0742e26.md](references/hosted-final-0742e26.md) — aggregate provider lifecycle snapshot Busy stopped the native sizing retry before app build.
+- [references/agent-lifecycle-snapshot-fixture-repair.md](references/agent-lifecycle-snapshot-fixture-repair.md) — bounded shared reads preserve lifecycle, alert and generation assertions through snapshot contention.

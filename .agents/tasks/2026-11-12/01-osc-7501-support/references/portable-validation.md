@@ -99,3 +99,9 @@ Workspace drag fixture minimum-size correction aggregate: **763/0/7**,
 Original real overflow, nonzero scroll, simultaneous target visibility, drag
 callbacks and lifecycle assertions remain. The prior 261.59-second receipt is
 archived as `check-round27`. Native AppKit acceptance remains hosted.
+
+Provider lifecycle bounded snapshot fixture aggregate: **763/0/7**, 263.27
+seconds, unchanged source fingerprints and unrelated preservation hashes.
+One-shot reads reuse the existing bounded helper; live reads retain the original
+eight-second deadline. Lifecycle/alert/generation assertions and all actions
+remain. Previous complete 259.96-second receipt is archived as `check-round28`.

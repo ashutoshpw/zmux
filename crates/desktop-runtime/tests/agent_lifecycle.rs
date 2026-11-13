@@ -9,11 +9,14 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Desktop, Shell,
     agent_lifecycle::{Action, Activity, AlertKind, Connection, Event, Provider, Request, Target},
     control::{CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, ControlServer},
 };
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use zmux_remote_runtime::agent_lifecycle::{
     ProviderKind, ProviderLifecycleObservation, ProviderMarker, ProviderScope, ProviderState,
     ProviderTransition,
@@ -54,9 +57,9 @@ fn desktop() -> Desktop {
 
 fn live_snapshot(desktop: &Desktop) -> Arc<zmux_desktop_runtime::Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(8);
+    let mut snapshot = desktop_snapshot::read_until(desktop, deadline);
     loop {
-        if let Ok(snapshot) = desktop.snapshot()
-            && !snapshot.control_frames.is_empty()
+        if !snapshot.control_frames.is_empty()
             && snapshot.control_frames.iter().all(|frame| {
                 frame
                     .snapshot
@@ -68,6 +71,7 @@ fn live_snapshot(desktop: &Desktop) -> Arc<zmux_desktop_runtime::Snapshot> {
         }
         assert!(Instant::now() < deadline, "terminal did not become live");
         thread::sleep(Duration::from_millis(5));
+        snapshot = desktop_snapshot::read_until(desktop, deadline);
     }
 }
 
@@ -245,7 +249,7 @@ fn local_lifecycle_requires_the_exact_running_owner_and_fences_old_generations()
         ),
     );
     assert!(!rejected.ok);
-    assert!(desktop.snapshot().unwrap().agent_lifecycle.is_empty());
+    assert!(desktop_snapshot::read(&desktop).agent_lifecycle.is_empty());
 
     let provider_session_id = Uuid::new_v4();
     let runtime_one = Uuid::new_v4();
@@ -259,7 +263,7 @@ fn local_lifecycle_requires_the_exact_running_owner_and_fences_old_generations()
     let initial_agent = live_snapshot(&desktop).agent_lifecycle[0].clone();
     assert_eq!(initial_agent.activity, Activity::Unknown);
     assert_eq!(initial_agent.connection, Connection::Connected);
-    let snapshot_json = serde_json::to_value(desktop.snapshot().unwrap().as_ref()).unwrap();
+    let snapshot_json = serde_json::to_value(desktop_snapshot::read(&desktop).as_ref()).unwrap();
     assert!(
         snapshot_json["agent_lifecycle"][0]
             .get("capability")
@@ -768,9 +772,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             sequence: 2,
         },
     ));
-    let codex = desktop
-        .snapshot()
-        .unwrap()
+    let codex = desktop_snapshot::read(&desktop)
         .agent_lifecycle
         .iter()
         .find(|agent| agent.provider == Provider::CodexLocal)
@@ -800,9 +802,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             },
         },
     ));
-    let codex = desktop
-        .snapshot()
-        .unwrap()
+    let codex = desktop_snapshot::read(&desktop)
         .agent_lifecycle
         .iter()
         .find(|agent| agent.provider == Provider::CodexLocal)
@@ -845,9 +845,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             sequence: 2,
         },
     ));
-    let opencode = desktop
-        .snapshot()
-        .unwrap()
+    let opencode = desktop_snapshot::read(&desktop)
         .agent_lifecycle
         .iter()
         .find(|agent| agent.provider == Provider::OpenCodeLocal)
@@ -983,7 +981,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             ),
         ),
     ));
-    let completion_snapshot = desktop.snapshot().unwrap();
+    let completion_snapshot = desktop_snapshot::read(&desktop);
     let codex_completed: Vec<_> = completion_snapshot
         .agent_alert_events
         .iter()
@@ -1011,9 +1009,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
     let snapshot_wait_session = "codex_snapshot_wait";
     let snapshot_wait_runtime = Uuid::new_v4();
     let snapshot_wait_generation = Uuid::new_v4();
-    let attention_count_before_snapshot = desktop
-        .snapshot()
-        .unwrap()
+    let attention_count_before_snapshot = desktop_snapshot::read(&desktop)
         .agent_alert_events
         .iter()
         .filter(|alert| alert.kind == AlertKind::NeedsUser)
@@ -1054,9 +1050,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             ),
         ),
     ));
-    let attention_count_after_snapshot = desktop
-        .snapshot()
-        .unwrap()
+    let attention_count_after_snapshot = desktop_snapshot::read(&desktop)
         .agent_alert_events
         .iter()
         .filter(|alert| alert.kind == AlertKind::NeedsUser)
@@ -1073,9 +1067,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
     let loss_session = "codex_loss_history";
     let loss_runtime = Uuid::new_v4();
     let loss_generation = Uuid::new_v4();
-    let attention_count_before_loss = desktop
-        .snapshot()
-        .unwrap()
+    let attention_count_before_loss = desktop_snapshot::read(&desktop)
         .agent_alert_events
         .iter()
         .filter(|alert| alert.kind == AlertKind::NeedsUser)
@@ -1166,9 +1158,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             ),
         ),
     ));
-    let attention_count_after_loss = desktop
-        .snapshot()
-        .unwrap()
+    let attention_count_after_loss = desktop_snapshot::read(&desktop)
         .agent_alert_events
         .iter()
         .filter(|alert| alert.kind == AlertKind::NeedsUser)
@@ -1264,7 +1254,7 @@ fn generic_provider_observations_are_local_control_actions_with_explicit_ends() 
             ),
         ),
     );
-    let fence_snapshot = desktop.snapshot().unwrap();
+    let fence_snapshot = desktop_snapshot::read(&desktop);
     let current_fenced_agent = fence_snapshot.agent_lifecycle.iter().find(|agent| {
         agent.provider == Provider::CodexLocal
             && agent.runtime_id == fence_runtime_b

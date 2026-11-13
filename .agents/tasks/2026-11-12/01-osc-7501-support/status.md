@@ -6,6 +6,27 @@
 
 ## Current delivery gates
 
+- Provider lifecycle fixture now reuses bounded Desktop reads throughout its
+  existing three tests, including the original eight-second live deadline.
+  Parent accepted the mechanical diff; final aggregate **763/0/7**, 263.27
+  seconds, source stable and unrelated work preserved. Commit/push follows.
+  Workspace viewport correction still requires executed native acceptance.
+
+- Universal `43395036940` at `0742e26` failed during aggregate validation:
+  provider lifecycle fixture `generic_provider_observations_are_local_control_actions_with_explicit_ends`
+  unwrapped transient Desktop snapshot Busy at line 805. App/native checks did
+  not run, so the workspace viewport fix remains natively unverified. A
+  single-file bounded snapshot-reader repair is active; assertions and mutation
+  submissions remain intact. No app artifact was produced.
+
+- Latest source pushed: `0742e26029a872449518a23eb5c5d9f30f7e3d0a`.
+  [Universal macOS 43395036940](https://github.com/ashutoshpw/zmux/actions/runs/43395036940)
+  is queued. Final local aggregate passed **763/0/7**, 259.96 seconds;
+  retained engine source closure is unchanged (229/229 Git pins verified).
+  The latest fixture-only Swift path did not trigger Foundation; the universal
+  job still executes its aggregate before native checks. Final artifact and
+  actual Programs image remain required.
+
 - Workspace drag fixture now honors its captured NSWindow minimum through
   AppKit frame-to-content conversion. Original scroll/visibility/callback checks
   remain. Parent accepted the small fixture diff; final local aggregate passed
