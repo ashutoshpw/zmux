@@ -148,3 +148,7 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-buffer-busy-diagnosis.md](references/native-buffer-busy-diagnosis.md) — post-dispatch response copy contends with handle registry; separate bounded response store without replay.
 - [references/native-buffer-busy-repair.md](references/native-buffer-busy-repair.md) — dedicated bounded response store, deterministic returned-token contention red/green and unchanged C ABI admission gates.
 - [references/native-buffer-busy-recheck.md](references/native-buffer-busy-recheck.md) — independent source acceptance of dedicated response slots, non-replay and ID/capacity ownership.
+- [references/hosted-final-848e72c.md](references/hosted-final-848e72c.md) — Foundation and packaged/file-panel/Cloud pass; populated Agents viewport assertion blocked final sidebar upload.
+- [references/native-sidebar-agent-viewport-diagnosis.md](references/native-sidebar-agent-viewport-diagnosis.md) — expanded fixture asks simultaneous rows to fit a smaller 28% viewport; temporary measured viewport proposed.
+- [references/native-sidebar-agent-viewport-repair.md](references/native-sidebar-agent-viewport-repair.md) — measured temporary expanded Agents viewport, restored production ratios before compact scroll and owner assertions.
+- [references/native-sidebar-agent-viewport-recheck.md](references/native-sidebar-agent-viewport-recheck.md) — source acceptance; parent adds post-growth Spaces-origin success assertion for the P3 evidence gap.

@@ -908,7 +908,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         window.setContentSize(NSSize(width: 900, height: 760))
         applySidebarLayout()
         content.layoutSubtreeIfNeeded()
-        guard let workspaceScroll = sidebarScroll else { throw BridgeFailure(message: "Workspace sidebar scroll view is unavailable") }
+        guard let workspaceScroll = sidebarScroll,
+              let agentScroll = agentSidebarList.enclosingScrollView else {
+            throw BridgeFailure(message: "Workspace or Agents sidebar scroll view is unavailable")
+        }
         let workspaceScrollOrigin = workspaceScroll.contentView.bounds.origin
         let expectedAgentRows: [(provider: String, label: String, activity: String, status: String, group: String)] = [
             ("claude_local", "Claude Code", "working", "Working", "Working"),
@@ -948,6 +951,25 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 "group_accessibility_label": group.accessibilityLabel() ?? ""
             ])
         }
+
+        // Fit the expanded smoke's populated document, then restore compact scrolling below.
+        let agentDocumentFittingHeight = agentSidebarList.fittingSize.height
+        let agentDocumentFrameHeight = agentSidebarList.frame.height
+        let agentDocumentHeight = max(agentDocumentFittingHeight, agentDocumentFrameHeight)
+        guard agentDocumentHeight.isFinite, agentDocumentHeight > 0 else {
+            throw BridgeFailure(message: "Populated Agents document has no finite positive fitting or frame height")
+        }
+        let expandedAgentViewportMinimum = agentScroll.heightAnchor.constraint(
+            greaterThanOrEqualToConstant: agentDocumentHeight
+        )
+        expandedAgentViewportMinimum.priority = .required
+        defer {
+            expandedAgentViewportMinimum.isActive = false
+            content.layoutSubtreeIfNeeded()
+        }
+        expandedAgentViewportMinimum.isActive = true
+        content.layoutSubtreeIfNeeded()
+
         let agentRowVisible = rowsByProvider.count == 3 && rowsByProvider.values.allSatisfy { row in
             !row.isHiddenOrHasHiddenAncestor
                 && row.visibleRect.width >= row.bounds.width - 1
@@ -961,10 +983,43 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             return label
         })
         guard agentRowVisible,
-              groupLabels == Set(["Needs attention, 1 agents", "Working, 1 agents", "Idle, 1 agents"]) else {
-            throw BridgeFailure(message: "Populated Agents rows or grouped state headers are incomplete")
+              groupLabels == Set(["Needs attention, 1 agents", "Working, 1 agents", "Idle, 1 agents"]),
+              workspaceScroll.contentView.bounds.origin == workspaceScrollOrigin else {
+            let visibleRowCount = rowsByProvider.values.filter { row in
+                !row.isHiddenOrHasHiddenAncestor
+                    && row.visibleRect.width >= row.bounds.width - 1
+                    && row.visibleRect.height >= row.bounds.height - 1
+            }.count
+            let rowRects = expectedAgentRows.compactMap { rowsByProvider[$0.provider] }.map { row in
+                String(describing: row.convert(row.bounds, to: agentScroll.contentView))
+            }
+            let groupViews = expectedAgentRows.compactMap { expected in
+                agentSidebarList.arrangedSubviews.first(where: {
+                    ($0.accessibilityLabel() ?? "").hasPrefix("\(expected.group), ")
+                })
+            }
+            let groupRects = groupViews.map { group in
+                String(describing: group.convert(group.bounds, to: agentScroll.contentView))
+            }
+            let visibleGroupCount = groupViews.filter { group in
+                !group.isHiddenOrHasHiddenAncestor
+                    && group.visibleRect.width >= group.bounds.width - 1
+                    && group.visibleRect.height >= group.bounds.height - 1
+            }.count
+            let programsViewport = programSidebarList.enclosingScrollView?.contentView.bounds ?? .zero
+            let spacesOriginUnchanged = workspaceScroll.contentView.bounds.origin == workspaceScrollOrigin
+            let geometry = "agent_viewport=\(agentScroll.contentView.bounds),agent_document=\(agentSidebarList.frame),"
+                + "document_minimum=\(agentDocumentHeight),"
+                + "fitting_height=\(agentDocumentFittingHeight),frame_height=\(agentDocumentFrameHeight),"
+                + "visible_rows=\(visibleRowCount)/\(rowsByProvider.count),"
+                + "visible_groups=\(visibleGroupCount)/\(expectedAgentRows.count),group_labels=\(groupLabels.count),"
+                + "row_rects=\(rowRects),group_rects=\(groupRects),programs_viewport=\(programsViewport),"
+                + "spaces_origin_unchanged=\(spacesOriginUnchanged)"
+            throw BridgeFailure(message: "Populated Agents rows or grouped state headers are incomplete (\(geometry))")
         }
         try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-agents.png"))
+        expandedAgentViewportMinimum.isActive = false
+        content.layoutSubtreeIfNeeded()
         window.setContentSize(NSSize(width: 900, height: 420))
         applySidebarLayout()
         content.layoutSubtreeIfNeeded()

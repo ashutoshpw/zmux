@@ -1,6 +1,6 @@
 # Status
 
-- Continuation: dedicated response-buffer store passed aggregate round 36 **767/0/7** in 264.86 seconds, unchanged source and preserved unrelated work. Independent review accepted with no actionable findings. Returned-token contention has a deterministic old-owner failure/new-owner success; exact hosted lock holder and file-panel connection remain unknown. No accepted final app exists.
+- Continuation: expanded-Agent fixture sizing accepted in independent review; post-growth Spaces-origin success assertion resolves its P3 evidence gap. Final aggregate round 38 passed **767/0/7** in 262.30 seconds with stable source and unrelated work preserved. Fresh hosted sidebar/Programs acceptance and final artifact remain outstanding.
 
 - **State:** in-progress
 - **Updated:** 2026-11-13
@@ -8,7 +8,16 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `7f6d5ac29c4d51d00d4f08f416d2dae7b1d41557`.
+- Latest pushed source: `848e72c75d5c06eefaba7c95b08c5c24b4318c32`.
+  Dedicated native response-buffer store and independent review accepted.
+  Aggregate round 36 **767/0/7**, 264.86 seconds, unchanged source and
+  preserved unrelated work. All 229 retained linkage inputs match this commit.
+  Exact-source Foundation passed Ubuntu **767/0/7**, macOS **765/0/7**.
+  Universal `43441181931` passed Cloud lifecycle and packaged/native smoke
+  including `file_panel=true`, then failed at populated Agents row/group
+  viewport assertion during sidebar acceptance. Final upload and Programs
+  success receipt/image absent. Bounded sidebar geometry diagnosis is active.
+- Previous source: `7f6d5ac29c4d51d00d4f08f416d2dae7b1d41557`.
   Scoped OpenCode synthetic help repair and bounded native file-load failure
   evidence passed independent review. Final local round 35 passed **765/0/7**
   in 263.59 seconds, with unchanged source and preserved unrelated work.
