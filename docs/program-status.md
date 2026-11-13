@@ -1,9 +1,8 @@
 # Terminal program status with OSC 7501
 
-This page describes Zmux's in-progress source integration for Program Status
-Protocol revision 0.4. It is not a claim that a released or verified development
-build includes the feature. The existing build receipt in
-[development builds](development-builds.md) predates this work.
+Zmux supports Program Status Protocol revision 0.4 in the verified universal
+macOS development build from source `2c0cf2b40c4f0ee04048209272e3172a1ac30ce1`.
+See the [download and verification receipt](development-builds.md#verified-build-receipt).
 
 OSC 7501 lets a process report its own status through the terminal output stream.
 Zmux keeps these records per terminal and shows them in a Programs group beside
@@ -114,12 +113,13 @@ not automatically deduplicated against provider or OSC 7501 alerts.
 
 ## Build boundary
 
-This integration is still in progress and has no fresh accepted app artifact or
-CI receipt. Optional Ghostty 7501 support requires a new versioned source
-candidate and fresh libraries accepted for that candidate. Historical Ghostty
-roots and build receipts do not prove the 7501 Programs UI. See
-[development build evidence](development-builds.md) for the current delivery
-receipt and acceptance requirements.
+The accepted development app uses the default `vt100` engine. Exact-source
+hosted checks and packaged Programs/sidebar acceptance passed; the downloaded
+universal package and its native screenshots were verified. Optional Ghostty
+7501 engine and Session linkage are covered by separate source-pinned retained
+evidence; Ghostty is not linked into this app. See the
+[development build receipt](development-builds.md#verified-build-receipt) for
+checksums, platform and signing details, and the limits of hosted acceptance.
 
 The protocol is specified in the public [Program Status Protocol
 revision 0.4](https://superlogical.com/rex/docs/build/program-status).

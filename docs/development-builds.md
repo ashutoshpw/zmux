@@ -7,7 +7,7 @@
 1. Open a successful workflow run and find its **Artifacts** section (GitHub sign-in required).
 2. Download `zmux-macos-dev-universal-<source-sha>`.
 3. Extract the Actions artifact, then extract the inner `zmux-dev-universal-<sha>.zip`.
-4. Move **zmux** to your Applications folder and open it.
+4. Quit any older Zmux instance, move **zmux** to your Applications folder, then open it.
 
 The bundle supports Apple Silicon and Intel Macs running macOS 14 or later. The artifact
 also contains SHA-256 checksums, architecture/source metadata, native smoke results and a
@@ -46,10 +46,12 @@ Release signing, notarization and automatic updates are later distribution gates
 - Browser cloud sign-in with PKCE, Keychain credentials and account/device management.
 - A serialized command path and revisioned snapshots; native UI does not parse PTY output.
 
-The OSC 7501 Programs integration is still in progress and is not established by the
-older verified build receipt below. Optional Ghostty support requires a new versioned
-7501 source candidate and fresh accepted libraries; historical Ghostty roots and
-receipts are not proof of the 7501 UI. See the [program status guide](program-status.md).
+The default `vt100` engine's OSC 7501 Programs interface passed exact-source packaged
+macOS acceptance with literal shell reports sent through the app PTY and production
+parser. The accepted app uses `vt100`; optional Ghostty is not linked into this build.
+Separate retained Ghostty linkage tests cover its 7501 engine and Session paths, but do
+not change the delivered app's engine. See the [program status guide](program-status.md)
+and the [verified build receipt](#verified-build-receipt).
 
 Use **⌘N** for a workspace, **⌘T** for a terminal tab, **⌘D** to split right, **⇧⌘D** to
 split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the last closed item.
@@ -134,24 +136,41 @@ and checked for architecture/signature, but Intel runtime behavior still needs d
 
 ## Verified build receipt
 
-[Download the verified universal development build](https://github.com/ashutoshpw/zmux/actions/runs/38647522249/artifacts/11932279010)
-from [successful run 38647522249](https://github.com/ashutoshpw/zmux/actions/runs/38647522249).
-Source: `7e9355b4dd820580443777ae6b3dd9a5fb0f4024`; expires 2026-10-28.
+[Download the verified universal development build](https://github.com/ashutoshpw/zmux/actions/runs/43455598200/artifacts/14057620449)
+from [successful run 43455598200](https://github.com/ashutoshpw/zmux/actions/runs/43455598200).
+The run built exact source `2c0cf2b40c4f0ee04048209272e3172a1ac30ce1`; the artifact expires
+2026-11-27 16:21:25 UTC. GitHub sign-in may be required.
 
-Inner ZIP SHA-256:
+- The downloaded Actions artifact is **30,775,347 bytes**, SHA-256
+  `3c0a077e41f71fd56465f7c4e2fe8c2a47f32d33582e473f4a2bee44ad40c1c4`.
+- Its inner app ZIP is **26,916,243 bytes**, SHA-256
+  `3da3a1a57243550c791e2146d721b3cf674ebbc256bb24ff5b0aa0e90fd805eb`.
+- Verified app, CLI, native bridge and scheduler contain **arm64 and x86_64** slices;
+  packaged metadata and `Info.plist` declare **macOS 14.0**. The package is ad-hoc
+  signed and not notarized.
+- Default terminal engine: `vt100`. Optional Ghostty is not linked into this app.
 
-```text
-af702ab35d18da35de71421eed0b48477a61f3e0b67a2f548aa47db2b02b897e
-```
+Local `scripts/check` passed **767/0/7** in 262.30 seconds with unchanged source and
+unrelated work preserved. Exact-source Foundation run [43455639671](https://github.com/ashutoshpw/zmux/actions/runs/43455639671)
+passed Ubuntu **767/0/7** and macOS **765/0/7**; the universal workflow's integrated
+check passed **765/0/7**. Hosted native acceptance passed for terminal selection,
+sidebar, Programs and system status menu. Its Programs fixture sent literal OSC 7501
+shell `printf` reports through the packaged PTY and production parser; exact owner,
+record, selection, inventory and provider-coexistence assertions passed.
 
-The downloaded archive was checked for integrity, checksum, matching metadata, executable
-permissions, notices/icon and both architectures in the app, CLI and runtime library. Native
-input/rendering, pane/workspace operations, terminal tab create/close/reopen, surviving PIDs,
-sidebar/attention routing, WebKit form/state retention and balanced/retained split geometry passed.
+The parent reviewed the actual compact Programs and expanded Agents screenshots from
+the downloaded package. The Programs image uses a scrolled viewport. The expanded
+Agents image uses a temporary fixture viewport and does not show every row fitting the
+normal 28% sidebar height allocation. The idle/working fixture requested no alert sound, so audio
+playback was not tested.
 
-Both captured images were inspected. `Zmux-native-smoke.png` shows AppKit chrome and balanced
-panes; `zmux-browser-smoke.png` shows actual WebKit page pixels and retained form input. Cached
-AppKit rendering omits remote WebContent layers; WindowServer capture was unavailable on this
-runner. Physical keyboard/drag/IME/VoiceOver, Intel runtime and measured resource/remote-soak
-budgets still require native dogfood. Cloud callback smoke is offline, and the service remains
-undeployed. See the [detailed delivery receipt](../.agents/tasks/2026-10-14/05-command-ux-parity/references/native-delivery.md).
+Separate retained Ghostty linkage run [43407437492 / artifact 14027538458](https://github.com/ashutoshpw/zmux/actions/runs/43407437492/artifacts/14027538458)
+is pinned to source `2efb76d9bcbb9e0a00015602b8bcaf81c00920de`. Its 229/229 source
+inputs matched the delivered source pins; both Apple targets compiled and linked, and
+the ARM engine **4/4**, linked 7501 engine **1/1**, Session **4/4**, and real-PTY
+7501 Session **1/1** tests passed. This retained evidence does not mean Ghostty is in
+the app package and does not establish Intel runtime behavior.
+
+Native acceptance ran on hosted Apple Silicon. Intel runtime, physical-user acceptance
+and production behavior are not claimed. See the task's [permanent delivery record](../.agents/tasks/2026-11-12/01-osc-7501-support/references/delivery.md)
+and [hosted run evidence](../.agents/tasks/2026-11-12/01-osc-7501-support/references/hosted-final-2c0cf2b.md).

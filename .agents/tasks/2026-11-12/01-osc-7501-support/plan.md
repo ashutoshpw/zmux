@@ -24,22 +24,22 @@ Adapter-owned terminals retain provider authority; generic OSC alerts require an
 explicit single-source notification policy and never use text matching to deduplicate.
 
 ## Steps
-- [x] **1. Parser capability gate:** verified authoritative parser gaps and accepted narrow VTE/vt100 and Ghostty metadata supplements; new exact-source Ghostty artifacts remain a delivery gate.
+- [x] **1. Parser capability gate:** verified parser gaps and accepted narrow VTE/vt100 and Ghostty metadata supplements. Retained pinned Ghostty linkage acceptance is recorded separately from the app build, which uses `vt100`.
 - [x] **2. Protocol owner:** add bounded revision-0.4 decoding and records, atomic rejection, replacement/inheritance/clear semantics, and lifetime events; add contract tests.
 - [x] **3. Engine/session plumbing:** preserve ordered transitions and capability replies through the sole PTY writer, with staged commit/abort, exit and recovery fences; add engine and real-PTY tests.
 - [x] **4. Desktop coexistence (source and focused checks):** expose terminal-scoped program records, exact selection and deterministic adapter/OSC alert ownership; add desktop, transport and alert tests.
-- [x] **5. Native presentation (source complete; hosted acceptance pending):** add a Programs subgroup alongside Agents, progress and blocked reasons, safe labels and shared alert preferences; add focused packaged native acceptance.
-- [ ] **6. Delivery:** document usage/limits, run required portable and applicable linked/native gates, commit cohesive validated slices, then deliver a fresh verified universal macOS development artifact.
+- [x] **5. Native presentation:** add a Programs subgroup alongside Agents, progress and blocked reasons, safe labels and shared alert preferences; exact-source hosted packaged native acceptance passed.
+- [x] **6. Delivery:** document usage and limits, pass portable and applicable linked/native gates, and verify a fresh universal macOS development artifact with exact source, checksums, architectures, minimum OS and signing metadata.
 
 ## Acceptance criteria
-- [ ] All states, fields, hierarchy, lifetime, limits and optional pre-query emission follow revision 0.4; malformed reports cannot partly mutate records or terminal output.
-- [ ] Reports survive fragmentation; capability replies precede subsequent DA replies and never interleave with previously admitted input or echo report data.
-- [ ] Both supported engine paths pass their applicable contracts; missing pinned-engine hooks are resolved explicitly, with no default-engine switch or hidden parser fallback.
-- [ ] Provider lifecycle remains independent; OSC cannot impersonate an adapter, revive a stale session, or downgrade provider evidence.
-- [ ] Program rows focus their exact existing terminal; close/replacement, SSH loss and reconciliation cannot expose live stale state or replay alerts.
-- [ ] Identical reports, progress updates, resets, snapshots and suppressed sources do not create repeated sound; alert floods and transition loss have bounded, observable handling.
-- [ ] Meaningful tests pass at their production owners, including real PTY round trips and packaged native visuals; no test-only production seams or duplicated parser suites.
-- [ ] `scripts/check` and applicable hosted gates pass at the delivered source; final ZIP checksum, source metadata, arm64/x86_64, minimum OS and signing status are verified.
+- [x] All states, fields, hierarchy, lifetime, limits and optional pre-query emission follow revision 0.4; malformed reports cannot partly mutate records or terminal output.
+- [x] Reports survive fragmentation; capability replies precede subsequent DA replies and never interleave with previously admitted input or echo report data.
+- [x] Both supported engine paths pass their applicable contracts. Retained Ghostty linkage tests are separately source-pinned; the delivered app remains on `vt100` without Ghostty linked.
+- [x] Provider lifecycle remains independent; OSC cannot impersonate an adapter, revive a stale session, or downgrade provider evidence.
+- [x] Program rows focus their exact existing terminal; close/replacement, SSH loss and reconciliation cannot expose live stale state or replay alerts.
+- [x] Identical reports, progress updates, resets, snapshots and suppressed sources do not create repeated sound; alert floods and transition loss have bounded, observable handling.
+- [x] Meaningful tests pass at their production owners, including real PTY round trips and exact-source packaged native visuals; the fixture did not request sound playback.
+- [x] `scripts/check` and applicable hosted gates pass at the delivered source; final artifact checksum, source metadata, arm64/x86_64, minimum OS and signing status are verified.
 
 ## References
 - [references/design.md](references/design.md) — protocol decisions, ownership, coexistence, risks and repository anchors.
@@ -152,3 +152,5 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-sidebar-agent-viewport-diagnosis.md](references/native-sidebar-agent-viewport-diagnosis.md) — expanded fixture asks simultaneous rows to fit a smaller 28% viewport; temporary measured viewport proposed.
 - [references/native-sidebar-agent-viewport-repair.md](references/native-sidebar-agent-viewport-repair.md) — measured temporary expanded Agents viewport, restored production ratios before compact scroll and owner assertions.
 - [references/native-sidebar-agent-viewport-recheck.md](references/native-sidebar-agent-viewport-recheck.md) — source acceptance; parent adds post-growth Spaces-origin success assertion for the P3 evidence gap.
+- [references/hosted-final-2c0cf2b.md](references/hosted-final-2c0cf2b.md) — exact-source hosted Foundation, universal build, downloaded package, and native Programs/sidebar acceptance receipts with proof limits.
+- [references/delivery.md](references/delivery.md) — permanent final artifact, checksum, package metadata, acceptance, retained Ghostty linkage and visual proof limits.

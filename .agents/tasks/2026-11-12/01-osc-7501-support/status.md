@@ -1,14 +1,29 @@
 # Status
 
-- Continuation: expanded-Agent fixture sizing accepted in independent review; post-growth Spaces-origin success assertion resolves its P3 evidence gap. Final aggregate round 38 passed **767/0/7** in 262.30 seconds with stable source and unrelated work preserved. Fresh hosted sidebar/Programs acceptance and final artifact remain outstanding.
+- **Current delivery:** Universal macOS artifact for `2c0cf2b40c4f0ee04048209272e3172a1ac30ce1` downloaded, checksum-verified and accepted. Exact-source hosted Foundation, native sidebar/Programs, status-menu and terminal-selection receipts passed; parent reviewed both delivered sidebar images. See [delivery record](references/delivery.md).
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-11-13
 - **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Integration source committed and pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
 
 ## Current delivery gates
 
-- Latest pushed source: `848e72c75d5c06eefaba7c95b08c5c24b4318c32`.
+- Delivered source: `2c0cf2b40c4f0ee04048209272e3172a1ac30ce1`.
+  Local final `scripts/check` passed **767/0/7** in 262.30 seconds with unchanged
+  source and unrelated work preserved. Foundation run `43455639671` passed
+  Ubuntu **767/0/7**, macOS **765/0/7**. Universal run `43455598200` succeeded;
+  downloaded artifact `14057620449` and inner ZIP checksums, exact source,
+  universal package metadata, and native receipts were verified. Program/sidebar,
+  system status menu and terminal-selection acceptance passed. Artifact expires
+  2026-11-27T16:21:25Z. Package is arm64/x86_64, minimum macOS 14.0, ad-hoc signed,
+  not notarized, default `vt100`, and has no linked Ghostty. See [delivery](references/delivery.md)
+  and [hosted evidence](references/hosted-final-2c0cf2b.md).
+## Historical delivery attempts
+
+Pending or active wording below is preserved from the recorded earlier source;
+the accepted current delivery is listed above.
+
+- Previous source: `848e72c75d5c06eefaba7c95b08c5c24b4318c32`.
   Dedicated native response-buffer store and independent review accepted.
   Aggregate round 36 **767/0/7**, 264.86 seconds, unchanged source and
   preserved unrelated work. All 229 retained linkage inputs match this commit.
@@ -161,10 +176,10 @@
   `a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f`). The
   frozen-patch metadata header is unchanged at SHA-256
   `127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c`.
-- The optional linked Ghostty Rust/session lane remains pending its fresh
-  `ghostty-7501-v1` libraries and linkage receipt; the source-only manifest exists. The current
-  historical library cannot verify 7501. No binary digest or review was invented;
-  artifact production and hosted linkage remain with the parent/artifact owner.
+- Retained optional Ghostty linkage acceptance is recorded separately in
+  [delivery](references/delivery.md): its 229 source inputs match the delivered
+  source pins, and its linked engine/Session tests passed. Ghostty is not linked
+  into the delivered `vt100` app.
 
 ### Focused validation
 
@@ -174,7 +189,7 @@
 - `CARGO_TARGET_DIR=/tmp/zmux-osc7501-vte-target cargo test --manifest-path vendor/vte/Cargo.toml --offline raw_osc_dispatch`: **3 passed**.
 - Scoped root `cargo fmt --check`, Clippy with `-D warnings`, `cargo check --locked --offline -p zmux-ghostty-vt`, and `git diff --check`: **passed**.
 - Whole-vendored-tree `cargo fmt` checks are not clean: the pinned VTE manifest references absent `examples/parselog.rs`, and the VTE/vt100 copies report formatting differences throughout untouched upstream files. No vendored baseline formatting was changed.
-- The pinned Ghostty source test run for this exact supplement hash previously passed **162/162** metadata-filtered tests (not rerun here). This pass verified that the supplement applies cleanly after the frozen patches; the pinned archive SHA-256, frozen patch hashes, supplement SHA-256 and unchanged metadata-header SHA-256 all match the handoff. Fresh optional linked Rust/session acceptance remains pending the candidate artifact.
+- The pinned Ghostty source test run for this exact supplement hash previously passed **162/162** metadata-filtered tests (not rerun here). This pass verified that the supplement applies cleanly after the frozen patches; the pinned archive SHA-256, frozen patch hashes, supplement SHA-256 and unchanged metadata-header SHA-256 all match the handoff. Retained linked engine/Session acceptance is recorded in [delivery](references/delivery.md).
 
 ## Completed planning evidence
 
@@ -196,12 +211,12 @@
 - Untracked `.github/workflows/profile-lifecycle-probe.yml`.
 - Untracked `tools/native-profile-lifecycle/`.
 
-## Remaining parent acceptance
+## Parent acceptance at previous handoff (completed)
 
-Finish versioned Ghostty candidate production/linkage and the applicable hosted
-native/artifact gates, then update overall task acceptance. This worker's explicit
-scope ends at the terminal/session/Ghostty source slice; no commit, push, workflow
-dispatch or app manipulation was performed.
+The previous worker handoff left versioned Ghostty linkage and hosted native/artifact
+gates with the parent. Those gates are now complete; see [delivery](references/delivery.md).
+The handoff worker's scope ended at the terminal/session/Ghostty source slice and did
+not include commit, push, workflow dispatch or app manipulation.
 
 ## Accepted discovery and current ownership
 
