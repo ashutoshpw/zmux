@@ -6,6 +6,37 @@
 
 ## Current delivery gates
 
+- Workspace drag fixture now honors its captured NSWindow minimum through
+  AppKit frame-to-content conversion. Original scroll/visibility/callback checks
+  remain. Parent accepted the small fixture diff; final local aggregate passed
+  **763/0/7** in 259.96 seconds, source stable and unrelated work preserved.
+  Commit/push and native acceptance follow; no portable native claim is made.
+
+- `9f2f13c` Foundation passed Linux **763/0/7**, macOS **761/0/7**.
+  Universal `43386617074` built the app and passed selection. Extracted
+  scheduled-message receipt records **passed**, all 16 checks including lost
+  create-reply receipt recovery; summary records the expected create/status/show
+  order. No functional scheduler fix is inferred from a successful retry.
+- The new first failure is broad smoke workspace drag geometry: after shrinking
+  the window and establishing nonzero scroll, expanded group header/anchor drop
+  points are outside the sidebar viewport. Read-only diagnosis is active.
+  Final sidebar/Programs acceptance and final upload remain skipped.
+
+- At `9f2f13c`, both Foundation jobs succeeded. The macOS browser-only locator
+  step was skipped and is not claimed as executed. Universal `43386617074` is
+  still running its aggregate step; no failure or native result is established
+  yet. Initial verifier returned pending, so continued verification is required
+  through this same existing run; do not rerun or change source for a pending
+  workflow. Final app and Programs acceptance remain pending.
+
+- Diagnostic source committed/pushed as `9f2f13c3f6742ef8b69af10f6a75a9960ef88682`.
+  Final aggregate **763/0/7**, 261.59 seconds, source stable and unrelated work
+  preserved. [Foundation 43386617224](https://github.com/ashutoshpw/zmux/actions/runs/43386617224)
+  and [universal 43386617074](https://github.com/ashutoshpw/zmux/actions/runs/43386617074)
+  are queued/running. This is one instrumented native experiment, not a
+  functional scheduler fix. All 229 retained linked-engine source pins match
+  this commit; the previously accepted `2e2c9d3` artifact is reused explicitly.
+
 - Native receipt diagnostic slice passed final local aggregate **763/0/7**,
   261.59 seconds, source stable and unrelated work preserved. Independent
   scoped review accepted; parent repaired its bounded-read P3 and passed

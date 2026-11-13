@@ -93,3 +93,9 @@ in 261.59 seconds, unchanged source fingerprints and preserved unrelated work.
 Report/config/log actual reads are capped; temporary functional bounds/privacy
 probes passed. Review accepted the scope, ABI classes and no-replay semantics.
 Prior complete 261.27-second receipt is archived as `check-round26`.
+
+Workspace drag fixture minimum-size correction aggregate: **763/0/7**,
+259.96 seconds; source fingerprints unchanged and unrelated work preserved.
+Original real overflow, nonzero scroll, simultaneous target visibility, drag
+callbacks and lifecycle assertions remain. The prior 261.59-second receipt is
+archived as `check-round27`. Native AppKit acceptance remains hosted.

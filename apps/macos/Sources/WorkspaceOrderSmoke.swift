@@ -267,9 +267,11 @@ enum WorkspaceOrderSmoke {
                 throw BridgeFailure(message: "Workspace drag fixture has no flipped, scrolled sidebar")
             }
             compactWindowApplied = true
-            window.minSize = NSSize(width: savedWindowMinSize.width, height: 180)
+            window.minSize = savedWindowMinSize
             let contentWidth = window.contentView?.bounds.width ?? savedWindowFrame.width
-            window.setContentSize(NSSize(width: contentWidth, height: 270))
+            let minimumFrame = NSRect(origin: .zero, size: savedWindowMinSize)
+            let minimumContentHeight = window.contentRect(forFrameRect: minimumFrame).height
+            window.setContentSize(NSSize(width: contentWidth, height: minimumContentHeight))
             layoutSidebar()
             try await wait("Workspace drag fixture did not create a truly scrollable sidebar") {
                 layoutSidebar()
@@ -365,8 +367,18 @@ enum WorkspaceOrderSmoke {
             let upperHeaderPoint = NSPoint(x: header.frame.midX, y: header.frame.midY - 1)
             let lowerHeaderPoint = NSPoint(x: header.frame.midX, y: header.frame.maxY - 1)
             let upperAnchorPoint = NSPoint(x: anchorRow.frame.midX, y: anchorRow.frame.minY + 1)
-            guard [upperHeaderPoint, lowerHeaderPoint, upperAnchorPoint].allSatisfy({ sidebar.visibleRect.contains($0) }) else {
-                throw BridgeFailure(message: "Expanded workspace group drop points are outside the visible sidebar viewport")
+            let expandedDropPoints = [upperHeaderPoint, lowerHeaderPoint, upperAnchorPoint]
+            guard expandedDropPoints.allSatisfy({ sidebar.visibleRect.contains($0) }) else {
+                let documentHeight = scrollView.documentView?.frame.height ?? 0
+                let geometry = [
+                    "points=\(expandedDropPoints)",
+                    "visibleRect=\(sidebar.visibleRect)",
+                    "clipBounds=\(clipView.bounds)",
+                    "documentHeight=\(documentHeight)",
+                    "windowFrame=\(window.frame)",
+                    "minSize=\(window.minSize)"
+                ].joined(separator: ", ")
+                throw BridgeFailure(message: "Expanded workspace group drop points are outside the visible sidebar viewport: \(geometry)")
             }
             let (firstSource, firstTarget) = try beginDrag(fixtureID)
             try verifyGroupStartCue(at: upperHeaderPoint, source: firstSource, target: firstTarget, label: "upper-header hover")

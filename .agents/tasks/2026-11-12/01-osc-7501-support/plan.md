@@ -120,3 +120,5 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-schedule-receipt-diagnosis.md](references/native-schedule-receipt-diagnosis.md) — native ABI failure boundary and bounded sanitized diagnostics needed before functional repair.
 - [references/native-schedule-receipt-evidence.md](references/native-schedule-receipt-evidence.md) — bounded numeric ABI status and sanitized RPC action summary for the next packaged experiment.
 - [references/native-schedule-receipt-evidence-recheck.md](references/native-schedule-receipt-evidence-recheck.md) — scoped diagnostics acceptance and repaired bounded-read P3.
+- [references/hosted-final-9f2f13c.md](references/hosted-final-9f2f13c.md) — Foundation and schedule receipt pass; expanded workspace drag viewport blocked final native delivery.
+- [references/workspace-drag-viewport-repair.md](references/workspace-drag-viewport-repair.md) — fixture honors captured AppKit minimum while retaining real overflow, scroll and drag invariants.
