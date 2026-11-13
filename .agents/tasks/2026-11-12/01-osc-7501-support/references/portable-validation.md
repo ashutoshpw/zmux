@@ -74,3 +74,10 @@ fingerprints remained unchanged and unrelated work matched the preservation
 ledger. The earlier Busy exit-read failure remains archived as `check-round23`;
 its underlying test contract is retained. This is local source validation,
 not post-fix macOS or packaged-app acceptance.
+
+Native selection compile-input fixture repair: full aggregate **763/0/7**,
+263.03 seconds; runtime source fingerprints unchanged and unrelated preservation
+ledger matched. The helper diff remains exactly the reviewed production-source
+entry, and its input check passed independently. The earlier 267.16-second
+receipt is archived as `check-round24`. Native compile and app acceptance remain
+hosted gates.

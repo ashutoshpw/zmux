@@ -6,7 +6,28 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `82df3353d2bea3a9b2f6919ba67b48b2df5fb05a`.
+- Source `2e2c9d3`: Foundation passed Linux **763/0/7** and macOS **761/0/7**;
+  retained Ghostty linkage passed, all 229 source pins matched, both Apple
+  compile/link and all ARM engine/Session 7501 execution passed.
+- Universal `43371105829` built the app, then failed terminal-selection
+  acceptance at its metadata Swift compile. Its explicit input closure omitted
+  `ProgramAlertDelivery.swift`, leaving ProgramAlertEventGate and
+  ProgramAlertSnapshotMode unresolved in NotificationDelivery. A narrow helper
+  input-list repair passed its inventory/PTY check and parent review; final
+  aggregate **763/0/7** in 263.03 seconds, source stable and unrelated work
+  preserved. App/sidebar acceptance and final upload were
+  skipped, so the retained candidate is not accepted delivery.
+
+- New validated source committed and pushed as
+  `2e2c9d3445574b51569a2428bf8962061332165d`. Final aggregate **763/0/7**,
+  267.16 seconds, source stable and unrelated work preserved.
+  [Foundation 43371105849](https://github.com/ashutoshpw/zmux/actions/runs/43371105849),
+  [universal macOS 43371105829](https://github.com/ashutoshpw/zmux/actions/runs/43371105829),
+  and [retained linkage 43371114352](https://github.com/ashutoshpw/zmux/actions/runs/43371114352)
+  are running/queued. Engine libraries were not rebuilt. Final artifact
+  verification is pending; the older outcomes below are historical.
+
+- Prior pushed source: `82df3353d2bea3a9b2f6919ba67b48b2df5fb05a`.
   Fixture reviews accepted and final local `scripts/check` passed **763/0/7**
   in 282.56 seconds, source stable and unrelated work preserved.
 - [Foundation 43366740329](https://github.com/ashutoshpw/zmux/actions/runs/43366740329):

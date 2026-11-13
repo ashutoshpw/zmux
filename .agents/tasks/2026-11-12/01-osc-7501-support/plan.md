@@ -114,3 +114,5 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/hosted-final-82df335.md](references/hosted-final-82df335.md) — Linux and retained linkage acceptance, macOS exec-fixture failure before app packaging.
 - [references/bootstrap-exec-fixture-repair.md](references/bootstrap-exec-fixture-repair.md) — portable inert-shell kernel exec check retaining the complete bootstrap and 64 KiB assertion.
 - [references/session-exit-snapshot-fixture-repair.md](references/session-exit-snapshot-fixture-repair.md) — original-deadline Busy handling in real Session reconnect exit observation.
+- [references/hosted-final-2e2c9d3.md](references/hosted-final-2e2c9d3.md) — both-platform Foundation and linked engine acceptance, native fixture compile-input failure after app build.
+- [references/native-selection-metadata-input-repair.md](references/native-selection-metadata-input-repair.md) — production ProgramAlert source added to shared native fixture compile/hash inputs.

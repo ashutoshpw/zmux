@@ -28,7 +28,7 @@ OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos
 METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
     'Models', 'AgentAlertPreferences', 'AgentAlertDelivery', 'AgentAlertAudio',
     'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
-    'NotificationDelivery', 'FileLoadGate', 'FileHostClient', 'NativeBridge',
+    'ProgramAlertDelivery', 'NotificationDelivery', 'FileLoadGate', 'FileHostClient', 'NativeBridge',
     'NativeStoragePath', 'TerminalKeyEncoder', 'BrowserProfileLeases', 'BrowserProfileOperations')) + (
     'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')
 METADATA_FRAMEWORK_ARGS = tuple(
