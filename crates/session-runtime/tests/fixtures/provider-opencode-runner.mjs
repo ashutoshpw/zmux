@@ -5,6 +5,12 @@ import { spawn } from "node:child_process";
 const [hostPath, rootSession, reportPath, ...providerArgs] = process.argv.slice(2);
 
 if (providerArgs[0] === "--help") {
+  const delayMs = Number(process.env.FIXTURE_OPENCODE_HELP_DELAY_MS ?? 0);
+  if (Number.isSafeInteger(delayMs) && delayMs > 0) {
+    fs.writeFileSync(process.env.FIXTURE_OPENCODE_HELP_DELAY_STARTED, `${process.pid}\n`);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    fs.writeFileSync(process.env.FIXTURE_OPENCODE_HELP_DELAY_COMPLETED, "completed\n");
+  }
   const supportsStandalone = process.env.FIXTURE_OPENCODE_STANDALONE_SUPPORT !== "0";
   process.stdout.write(
     supportsStandalone

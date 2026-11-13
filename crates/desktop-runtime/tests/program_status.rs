@@ -70,7 +70,9 @@ fn public_desktop_projects_live_osc_alert_and_selects_only_the_exact_program() {
         1,
         Command::Input {
             session_id,
-            text: "printf '\\033]7501;state=blocked:kind=question:id=approval\\007'\n".into(),
+            text:
+                "printf '\\033]7501;state=blocked:kind=question:id=approval\\007'; IFS= read -r _\n"
+                    .into(),
         },
     );
     let projected = wait(&desktop, |snapshot| {
@@ -164,5 +166,14 @@ fn public_desktop_projects_live_osc_alert_and_selects_only_the_exact_program() {
                 .as_deref()
                 .is_some_and(|error| error.contains("stale program target"))
     });
+    submit(
+        &desktop,
+        5,
+        Command::Input {
+            session_id,
+            text: "\n".into(),
+        },
+    );
+    wait(&desktop, |snapshot| snapshot.last_request_id == 5);
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }

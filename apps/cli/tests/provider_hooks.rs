@@ -2584,6 +2584,8 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
 
     let calls = dir.path.join("opencode-calls");
     let report = dir.path.join("opencode-report");
+    let help_delay_started = dir.path.join("opencode-help-delay-started");
+    let help_delay_completed = dir.path.join("opencode-help-delay-completed");
     let root_session = "session:root/opaque";
     let control_socket = dir.path.join("control.sock");
     let shell_rc = dir.path.join("opencode-shell.rc");
@@ -2591,7 +2593,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     fs::write(
         &shell_rc,
         format!(
-            "PS1=\nexport PATH='{}':\"$PATH\"\nexport ZMUX_SOCKET_PATH='{}'\nexport OPENCODE_CONFIG_DIR='{}'\nexport FIXTURE_OPENCODE_RUNNER='{}'\nexport FIXTURE_OPENCODE_PLUGIN_HOST='{}'\nexport FIXTURE_OPENCODE_ROOT_SESSION='{}'\nexport FIXTURE_OPENCODE_REPORT='{}'\nexport FIXTURE_OPENCODE_CALLS='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG_CONTENT='{}'\nexport FIXTURE_OPENCODE_USER_PLUGIN_CONTENT='{}'\nexport FIXTURE_OPENCODE_STANDALONE_SUPPORT=1\nprintf 'LOCAL_OPENCODE_SHELL_READY\\n'\n",
+            "PS1=\nunset FIXTURE_OPENCODE_HELP_DELAY_MS\nexport PATH='{}':\"$PATH\"\nexport ZMUX_SOCKET_PATH='{}'\nexport OPENCODE_CONFIG_DIR='{}'\nexport FIXTURE_OPENCODE_RUNNER='{}'\nexport FIXTURE_OPENCODE_PLUGIN_HOST='{}'\nexport FIXTURE_OPENCODE_ROOT_SESSION='{}'\nexport FIXTURE_OPENCODE_REPORT='{}'\nexport FIXTURE_OPENCODE_CALLS='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG='{}'\nexport FIXTURE_OPENCODE_USER_CONFIG_CONTENT='{}'\nexport FIXTURE_OPENCODE_USER_PLUGIN_CONTENT='{}'\nexport FIXTURE_OPENCODE_HELP_DELAY_STARTED='{}'\nexport FIXTURE_OPENCODE_HELP_DELAY_COMPLETED='{}'\nexport FIXTURE_OPENCODE_STANDALONE_SUPPORT=1\nzmux_fixture_ready_prompt() {{ printf 'LOCAL_OPENCODE_SHELL_READY\\n'; }}\nPROMPT_COMMAND=\"${{PROMPT_COMMAND:+$PROMPT_COMMAND; }}zmux_fixture_ready_prompt\"\n",
             bin.display(),
             control_socket.display(),
             config.display(),
@@ -2603,6 +2605,8 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
             config.display(),
             config_contents,
             user_plugin_contents,
+            help_delay_started.display(),
+            help_delay_completed.display(),
         ),
     )
     .unwrap();
@@ -2918,15 +2922,106 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         1,
         "untracked fallback must not fabricate another lifecycle session"
     );
+    assert!(
+        terminal_output_for(&running.desktop, terminal_session)
+            .contains("stage=standalone_option_not_advertised; elapsed_ms=")
+    );
 
     running
         .desktop
         .submit(Request {
             version: 1,
-            request_id: 77,
+            request_id: 85,
             payload: DesktopCommand::Input {
                 session_id: terminal_session,
-                text: "opencode --help\n".into(),
+                text: format!(
+                    "export FIXTURE_OPENCODE_STANDALONE_SUPPORT=1 FIXTURE_OPENCODE_HELP_DELAY_MS=5000\nopencode --session {root_session}\n"
+                ),
+            },
+        })
+        .unwrap();
+    let delayed_fallback_deadline = Instant::now() + Duration::from_secs(8);
+    let delayed_calls = loop {
+        let output = fs::read_to_string(dir.path.join("opencode-calls")).unwrap_or_default();
+        if output.lines().count() >= 3 {
+            break output
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+        }
+        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        assert!(
+            Instant::now() < delayed_fallback_deadline,
+            "slow OpenCode help preflight did not fail closed to one launch: {terminal}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(delayed_calls.len(), 3);
+    assert_eq!(delayed_calls[2]["args"], json!(["--session", root_session]));
+    assert_eq!(delayed_calls[2]["config_directory_is_invocation"], false);
+    assert_eq!(delayed_calls[2]["config_preserved"], true);
+    assert_eq!(delayed_calls[2]["user_plugin_preserved"], true);
+    assert_eq!(delayed_calls[2]["zmux_plugin_count"], 0);
+    assert!(help_delay_started.is_file());
+    let help_pid = fs::read_to_string(&help_delay_started)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    assert!(help_pid > 0);
+    assert_eq!(
+        kill(Pid::from_raw(help_pid), None),
+        Err(nix::errno::Errno::ESRCH),
+        "the delayed help child must be terminated and reaped before fallback"
+    );
+    assert!(
+        !help_delay_completed.exists(),
+        "timed-out OpenCode help preflight must stop its synthetic child"
+    );
+    let delayed_terminal = terminal_output_for(&running.desktop, terminal_session);
+    assert!(delayed_terminal.contains("OPENCODE_FALLBACK_LAUNCHED"));
+    let elapsed = delayed_terminal
+        .rsplit_once("stage=run_standalone_help_preflight; elapsed_ms=")
+        .expect("sanitized preflight timing diagnostic")
+        .1
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse::<u64>()
+        .unwrap();
+    assert!(
+        (1900..=2700).contains(&elapsed),
+        "two-second help preflight must finish inside the existing 2.7-second hook budget; elapsed_ms={elapsed}"
+    );
+    assert_eq!(
+        running
+            .desktop
+            .snapshot()
+            .unwrap()
+            .agent_lifecycle
+            .iter()
+            .filter(|agent| agent.provider == Provider::OpenCodeLocal)
+            .count(),
+        1,
+        "slow preflight fallback must not fabricate another lifecycle session"
+    );
+    assert_eq!(
+        fs::read(config.join("opencode.json")).unwrap(),
+        config_contents.as_bytes()
+    );
+    assert_eq!(
+        fs::read(plugins.join("user-plugin.js")).unwrap(),
+        user_plugin_contents.as_bytes()
+    );
+
+    running
+        .desktop
+        .submit(Request {
+            version: 1,
+            request_id: 86,
+            payload: DesktopCommand::Input {
+                session_id: terminal_session,
+                text: "unset FIXTURE_OPENCODE_HELP_DELAY_MS\nopencode --help\n".into(),
             },
         })
         .unwrap();

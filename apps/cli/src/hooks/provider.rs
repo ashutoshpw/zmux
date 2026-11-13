@@ -319,6 +319,7 @@ fn automatic_launch(
             }
         },
         ProviderName::OpenCode => {
+            let setup_started = Instant::now();
             match opencode::prepare_launch(&executable, &args, &runtime_dir) {
                 Ok(launch) => {
                     command.env("OPENCODE_CONFIG_DIR", launch.config_dir);
@@ -327,15 +328,16 @@ fn automatic_launch(
                     }
                     launch.args
                 }
-                Err(_) => {
+                Err(error) => {
+                    let reason = format!(
+                        "OpenCode session plugin setup failed; stage={}; elapsed_ms={}",
+                        error.stage,
+                        setup_started.elapsed().as_millis()
+                    );
                     stop_listener.store(true, Ordering::Release);
                     let _ = listener_thread.join();
                     let _ = fs::remove_dir_all(&runtime_dir);
-                    return launch_untracked(
-                        provider,
-                        args,
-                        "OpenCode session plugin setup failed",
-                    );
+                    return launch_untracked(provider, args, &reason);
                 }
             }
         }

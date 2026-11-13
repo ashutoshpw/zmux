@@ -92,3 +92,8 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/desktop-checkpoint-fixture-repair.md](references/desktop-checkpoint-fixture-repair.md) — foreground exact-byte PTY drain, controlled incomplete-drain evidence and focused checks.
 - [references/ghostty-session-linkage-repair.md](references/ghostty-session-linkage-repair.md) — deferred physical-read progress and corrected linked PTY ordering fixtures with local proof limits.
 - [references/darwin-pty-repairs-recheck.md](references/darwin-pty-repairs-recheck.md) — independent source acceptance, cadence/cache consistency and abort-proof limitation.
+- [references/hosted-final-87cc88d.md](references/hosted-final-87cc88d.md) — exact-source failed hosted outcomes, downloaded linkage hashes and absent app artifact.
+- [references/opencode-hosted-setup-repair.md](references/opencode-hosted-setup-repair.md) — bounded OpenCode setup diagnostics, controlled preflight regression and hosted root-cause limits.
+- [references/desktop-barrier-repair.md](references/desktop-barrier-repair.md) — deterministic actual-checkpoint FIFO barriers and command lifetime through public Programs selection.
+- [references/desktop-barrier-recheck.md](references/desktop-barrier-recheck.md) — independent acceptance of FIFO/public Programs and engine-baseline fixture repairs.
+- [references/opencode-hosted-setup-recheck.md](references/opencode-hosted-setup-recheck.md) — diagnostic-scope acceptance and child cleanup/timing coverage finding, resolved in repair evidence.

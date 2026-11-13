@@ -14,35 +14,67 @@ pub(super) struct Launch {
     pub(super) expected_session: Option<String>,
 }
 
+pub(super) struct SetupFailure {
+    pub(super) stage: &'static str,
+}
+
+fn setup_stage<T>(stage: &'static str, result: Result<T, CliError>) -> Result<T, SetupFailure> {
+    result.map_err(|_| SetupFailure { stage })
+}
+
 pub(super) fn prepare_launch(
     executable: &Path,
     args: &[OsString],
     runtime_dir: &Path,
-) -> Result<Launch, CliError> {
+) -> Result<Launch, SetupFailure> {
     if !interactive(args) {
-        return Err(CliError(
-            "OpenCode lifecycle tracking is available for interactive TUI launches".into(),
-        ));
+        return Err(SetupFailure {
+            stage: "interactive_command_mode",
+        });
     }
     standalone_supported(executable)?;
     let config_dir = runtime_dir.join("opencode-config");
-    fs::DirBuilder::new().mode(0o700).create(&config_dir)?;
+    setup_stage(
+        "create_invocation_config_directory",
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&config_dir)
+            .map_err(Into::into),
+    )?;
     let plugins_dir = config_dir.join("plugins");
-    fs::DirBuilder::new().mode(0o700).create(&plugins_dir)?;
+    setup_stage(
+        "create_invocation_plugins_directory",
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&plugins_dir)
+            .map_err(Into::into),
+    )?;
 
     if let Some(existing) = env::var_os("OPENCODE_CONFIG_DIR") {
-        mirror_config_directory(Path::new(&existing), &config_dir, &plugins_dir)?;
+        setup_stage(
+            "mirror_user_configuration",
+            mirror_config_directory(Path::new(&existing), &config_dir, &plugins_dir),
+        )?;
     }
 
     let plugin_name = format!("zmux-provider-{}.js", Uuid::new_v4().simple());
     let plugin_path = plugins_dir.join(plugin_name);
-    fs::write(
-        &plugin_path,
-        include_str!("../../../../../crates/session-runtime/src/shell/provider-opencode-plugin.js"),
+    setup_stage(
+        "install_invocation_plugin",
+        fs::write(
+            &plugin_path,
+            include_str!(
+                "../../../../../crates/session-runtime/src/shell/provider-opencode-plugin.js"
+            ),
+        )
+        .map_err(Into::into),
     )?;
-    fs::set_permissions(&plugin_path, fs::Permissions::from_mode(0o600))?;
+    setup_stage(
+        "set_invocation_plugin_permissions",
+        fs::set_permissions(&plugin_path, fs::Permissions::from_mode(0o600)).map_err(Into::into),
+    )?;
 
-    let expected_session = expected_session(args)?;
+    let expected_session = setup_stage("validate_root_session_id", expected_session(args))?;
     let mut launch_args = Vec::with_capacity(args.len() + 1);
     if !args.iter().any(|argument| argument == "--standalone") {
         launch_args.push(OsString::from("--standalone"));
@@ -55,19 +87,24 @@ pub(super) fn prepare_launch(
     })
 }
 
-fn standalone_supported(executable: &Path) -> Result<(), CliError> {
-    let cancellation = crate::bounded_command::Cancellation::new()?;
+fn standalone_supported(executable: &Path) -> Result<(), SetupFailure> {
+    let cancellation = crate::bounded_command::Cancellation::new().map_err(|_| SetupFailure {
+        stage: "initialize_standalone_help_preflight",
+    })?;
     let mut command = Command::new(executable);
     command.arg("--help");
     let output = crate::bounded_command::capture(
         &mut command,
         Instant::now() + Duration::from_secs(2),
         &cancellation,
-    )?;
+    )
+    .map_err(|_| SetupFailure {
+        stage: "run_standalone_help_preflight",
+    })?;
     if output.status != zmux_session_runtime::child::ExitObservation::Exited(0) {
-        return Err(CliError(
-            "OpenCode --help preflight did not complete successfully".into(),
-        ));
+        return Err(SetupFailure {
+            stage: "standalone_help_exit_status",
+        });
     }
     let help = format!("{}\n{}", output.stdout, output.stderr);
     let supported = help.lines().any(|line| {
@@ -83,9 +120,9 @@ fn standalone_supported(executable: &Path) -> Result<(), CliError> {
     if supported {
         Ok(())
     } else {
-        Err(CliError(
-            "installed OpenCode does not advertise --standalone".into(),
-        ))
+        Err(SetupFailure {
+            stage: "standalone_option_not_advertised",
+        })
     }
 }
 

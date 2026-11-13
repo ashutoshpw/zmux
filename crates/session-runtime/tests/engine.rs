@@ -317,10 +317,13 @@ fn block_input(session: &Session, reserved_events: usize) -> (usize, Vec<InputRe
 fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suffix_first() {
     let fixture = Fixture::new();
     let mut session = fixture.session(BLOCKED, Duration::from_secs(4));
-    let before = wait(&session, |s| s.viewport.title == "published");
+    wait(&session, |s| s.viewport.title == "published");
     // Reserve three queue slots for semantic key, whole paste and trailing raw
     // bytes. Real physical PTY backpressure is still independently required.
     let (completed, mut receipts) = block_input(&session, 3);
+    // Input admission can commit scroll-to-bottom before the query is sent.
+    // Compare deferred progress with that committed publication.
+    let before = session.snapshot().unwrap();
     let admitted_chunks = completed + receipts.len();
     fs::write(
         fixture.0.join("expected-prefix"),
@@ -380,8 +383,9 @@ fn blocked_ordering_deadline_or_close_aborts_without_publishing_or_replaying_que
                 Duration::from_millis(500)
             },
         );
-        let before = wait(&session, |s| s.viewport.title == "published");
+        wait(&session, |s| s.viewport.title == "published");
         let (completed, mut receipts) = block_input(&session, 0);
+        let before = session.snapshot().unwrap();
         fixture.mark("query");
         let query_bytes = fixture.wait_file("query-sent").parse::<u64>().unwrap();
         let staged = wait(&session, |s| {

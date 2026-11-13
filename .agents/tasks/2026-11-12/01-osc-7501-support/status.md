@@ -6,33 +6,32 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `b3334d269e1f0cac20a0d4886421d2a43667e155`.
-  The final CLI/Desktop repair is committed and pushed. Its full portable
-  `scripts/check` passed **759/0/7** in 277.19 seconds, including formatting,
-  strict Clippy, license inventory and bridge ABI. Source fingerprints stayed
-  unchanged and unrelated-file preservation hashes matched.
-- Separate review accepted deadline propagation, authorization, bounded queues,
-  cancellation, prior test-gap repairs and route rollback. Parent resolved its
-  two remaining response-classification findings with intended pre-fix failures
-  and a passing extended production Adapter transport case. Unknown outcomes
-  never fabricate a receipt, retry an Event or select an unkeyed fallback.
-- Fresh Ghostty producer `43315098805` from `7bf0864` has accepted exact library
-  bytes. Linkage `43335306931` at `9048d94` passed ARM engine and OSC 7501 engine
-  tests, then failed two existing Session backpressure fixtures. New Session/PTY
-  acceptance and Intel compilation were not reached; read-only diagnosis is
-  active. No complete linked Session acceptance is claimed.
-- Latest universal build `43317951167` at `b11b7ab` passed Swift typecheck but
-  failed the Claude fallback fixture. The pending runtime commit addresses both
-  authoritative provider-state and receipt-bearing Event checkpoint budgets,
-  with explicit ambiguity handling. A fresh final-source universal build and
-  downloaded artifact verification remain required. No accepted app download
-  exists for this feature yet.
-- Fresh final-runtime workflows: [Foundation 43337548294](https://github.com/ashutoshpw/zmux/actions/runs/43337548294)
-  and [universal macOS 43337548403](https://github.com/ashutoshpw/zmux/actions/runs/43337548403).
-  Both are executing against `b3334d2`; their outcomes remain pending.
-- Next: verify fresh universal build, accept
-  Session backpressure diagnosis and complete hosted linkage, then verify final
-  ZIP/source/architectures/minimum OS/signatures and packaged Programs evidence.
+- Latest pushed source: `87cc88d776f7378856da86d131e98be0c22f9846`.
+  Full local `scripts/check` passed **759/0/7** in 286.36 seconds with stable
+  source fingerprints and preserved unrelated work. Hosted outcomes below are
+  authoritative for native acceptance; the local pass does not supersede them.
+- All fresh hosted runs failed: Foundation `43342408930`, universal macOS
+  `43342408962`, and Ghostty linkage `43342460208`. No universal app ZIP,
+  packaged Programs receipt or screenshot was produced. The source has no
+  accepted app download.
+- ARM Ghostty engine tests passed 4/4 and its Program Status test 1/1. Both
+  blocked Session fixtures compare generation 3 with a stale generation-2
+  baseline taken before input admission. Parent now captures the committed
+  baseline after input backpressure and before emitting the query, retaining
+  all committed-state assertions. Session acceptance and Intel compile are
+  still pending native execution.
+- Foundation macOS failed the delayed checkpoint latency assertion; the child
+  can release its one-second hold before the observation thread is scheduled.
+  Universal macOS failed the public Programs projection fixture; a prompt reset
+  after its short printf command is under investigation. One Luna worker owns
+  deterministic Desktop test barriers with original assertions/deadlines.
+- Foundation Linux first failed OpenCode plugin setup, with subsequent mutex
+  poison cascades. The CLI now reports sanitized setup stages and elapsed time;
+  the real-Desktop fixture waits for completed shell startup and covers a
+  controlled slow-help fallback. The historical setup stage remains
+  unproven. See [OpenCode hosted setup repair](references/opencode-hosted-setup-repair.md).
+- Next: accept the two repair slices, independent review plus stable fullcheck,
+  scoped commit/push, retry hosted checks and verify final downloadable app.
 
 ## Earlier overall acceptance notes
 
@@ -546,3 +545,48 @@ dispatch or app manipulation was performed.
 - Combined Darwin repair full check passed **759/0/7** in 286.36 seconds with unchanged runtime/tooling fingerprints and matching unrelated preservation hashes. Final separate source review remains the commit/push gate; native retries and universal artifact acceptance are pending.
 
 - Final Darwin fixture/progress source review accepted the scoped repair with no blocking defect. Its low-severity abort test limitation is retained in the review: aggregate accepted bytes and rejection after termination do not independently prove a partial pending receipt or child-observed no replay. Successful sibling coverage observes exact child byte ordering. Native acceptance remains a separate gate.
+
+## Final source pushed for native retry
+
+- Reviewed Darwin repairs are committed and pushed at
+  `87cc88d776f7378856da86d131e98be0c22f9846`. Full portable checks passed
+  759/0/7 in 286.36 seconds with stable fingerprints and preserved unrelated work.
+- Fresh workflows at that source: Foundation `43342408930`, universal macOS
+  `43342408962`, and Ghostty linkage `43342460208` (Session runtime enabled).
+  All were running at dispatch; executed outcomes and downloadable final app
+  acceptance remain pending. Luna is collecting read-only hosted artifact evidence.
+
+## Latest hosted-failure slices ready for aggregate review
+
+- Desktop uses actual FIFO-held Session checkpoints and a test-local owner
+  driver to ensure public calls are admitted before the 300 ms hold. Programs
+  projection keeps its emitting command active through row selection/stale
+  target checks. Three focused tests, strict Clippy and both intended negative
+  controls pass; no production Desktop change is claimed.
+- OpenCode setup now reports fixed sanitized stage/elapsed diagnostics. The
+  fixture waits for its first completed prompt and covers the existing bounded
+  help-child failure path. Exact historical hosted cause remains unknown.
+  Existing two-second preflight and one original-argument fallback are retained.
+- All source writers are finished. Separate Desktop/engine and OpenCode reviews
+  plus a stable aggregate full check are running before the next scoped push.
+
+- Latest combined fixture/diagnostic full check passed **759/0/7** in 270.30 seconds, with unchanged source fingerprints and matching unrelated preservation. Separate Desktop and OpenCode review verdicts remain pending before commit/push. Native acceptance is still outstanding.
+
+- Both independent review verdicts are read: Desktop/engine fixtures accepted
+  without findings; OpenCode production diagnostics accepted with one test
+  proof gap. Parent added actual child-PID termination and bounded elapsed
+  assertions to the existing case. Focused green and intended three-second
+  deadline red control are recorded, with original production timeout restored.
+  A final stable full check is running before the cohesive push/native retry.
+
+## Final fixture and diagnostic validation before retry
+
+- Final local full check passed **759/0/7** in 264.34 seconds, including the
+  strengthened OpenCode child-termination/timing case. Runtime/tooling source
+  fingerprints remained unchanged and unrelated preservation hashes matched.
+- Independent Desktop/engine fixture review accepted with no findings. OpenCode
+  production diagnostics were accepted; parent addressed its single test-proof
+  finding with recorded focused green and intended widened-deadline red evidence.
+- This source is ready for a cohesive commit/push and fresh hosted retries.
+  Historical OpenCode setup cause remains unproven, and no app artifact is yet
+  accepted. Fresh hosted results must establish final native acceptance.

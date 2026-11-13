@@ -7,7 +7,8 @@ use crate::{
     *,
 };
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     net::TcpListener,
     os::unix::fs::PermissionsExt,
     sync::{
@@ -35,6 +36,16 @@ impl Drop for Directory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).unwrap();
     }
+}
+fn fifo(directory: &Directory) -> PathBuf {
+    let path = directory.0.join("checkpoint-release");
+    let status = std::process::Command::new("python3")
+        .args(["-c", "import os, sys; os.mkfifo(sys.argv[1], 0o600)"])
+        .arg(&path)
+        .status()
+        .expect("create PTY checkpoint release FIFO");
+    assert!(status.success(), "create PTY checkpoint release FIFO");
+    path
 }
 fn completion(io: &PersistenceWorker) -> crate::persistence::PersistenceCompletion {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -364,6 +375,7 @@ fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
     let blocked_input_bytes = BLOCKED_INPUT_CHUNKS * zmux_session_runtime::INPUT_CHUNK_BYTES;
     let directory = Directory::new();
     let mut worker = worker(&directory);
+    let release_fifo_path = fifo(&directory);
     let model = worker.model.snapshot();
     let surface = model.workspaces[0].root.panes()[0].selected().clone();
     let session_id = surface.session_id.unwrap();
@@ -371,7 +383,7 @@ fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
         program: "/bin/sh".into(),
         args: vec![
             "-c".into(),
-            r#"drain_input() {
+            r#"exec 3<> "$2"; drain_input() {
     python3 -c 'import os, sys
 remaining = int(sys.argv[1])
 while remaining:
@@ -380,9 +392,10 @@ while remaining:
         raise EOFError("PTY input closed during exact drain")
     remaining -= len(chunk)' "$1"
 }
-stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read -r line; printf 'PROVIDER_STATE_CHECKPOINT\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_1\n'; sleep 2; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_1\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_2\n'; sleep 1; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_2\n'; IFS= read -r line"#.into(),
+stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read -r line; printf 'PROVIDER_STATE_CHECKPOINT\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_1\n'; IFS= read -r release <&3; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_1\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_2\n'; IFS= read -r release <&3; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_2\n'; IFS= read -r line"#.into(),
             "provider-state-fixture".into(),
             blocked_input_bytes.to_string(),
+            release_fifo_path.to_string_lossy().into_owned(),
         ],
         cwd: None,
         size: Size { rows: 24, cols: 80 },
@@ -418,6 +431,10 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
         }
     };
     wait_for_live_snapshot(&worker, "PROVIDER_STATE_READY");
+    let mut release_fifo = OpenOptions::new()
+        .write(true)
+        .open(&release_fifo_path)
+        .expect("open PTY checkpoint release FIFO after child readiness");
     worker
         .live_session(session_id)
         .unwrap()
@@ -720,16 +737,15 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
     assert!(worker.agent_lifecycle.alert_events(&model).is_empty());
 
     // Exercise the production execute_authorized timeout owner while a real
-    // Session checkpoint sits behind PTY writes. This must cancel before the
-    // delayed checkpoint can apply the Event.
+    // Session checkpoint sits behind PTY writes. The FIFO keeps the child from
+    // draining those writes until the test releases the actual PTY barrier.
     worker.publish(false);
     let shared = Arc::clone(&worker.shared);
     let (sender, receiver) = mpsc::sync_channel(MAX_COMMANDS);
-    let worker_thread = thread::spawn(move || worker.run(receiver));
     let desktop = Desktop {
         sender,
         shared,
-        worker: Mutex::new(Some(worker_thread)),
+        worker: Mutex::new(None),
     };
     let gate = control_policy::ControlGate::new(control_policy::ControlPolicy::default());
     let authorize = |request: &agent_lifecycle::Request| {
@@ -743,39 +759,41 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
         .unwrap()
     };
     let request = make_hook_event(Uuid::new_v4());
-    let timeout = desktop.execute_authorized(
-        Request {
-            version: 1,
-            request_id: 95,
-            payload: Command::AgentLifecycle {
-                request: request.clone(),
-            },
-        },
-        Duration::from_millis(700),
-        authorize(&request),
-    );
+    let timeout = thread::scope(|scope| {
+        let call = scope.spawn(|| {
+            desktop.execute_authorized(
+                Request {
+                    version: 1,
+                    request_id: 95,
+                    payload: Command::AgentLifecycle {
+                        request: request.clone(),
+                    },
+                },
+                Duration::from_millis(700),
+                authorize(&request),
+            )
+        });
+        let envelope = receiver
+            .recv_timeout(Duration::from_millis(700))
+            .expect("public execution submits its command to the controlled worker");
+        worker.command(envelope);
+        assert_eq!(
+            worker.pending_program_status_checkpoints.len(),
+            1,
+            "timed public Event must be admitted to the real Session checkpoint queue"
+        );
+        call.join().unwrap()
+    });
     match timeout {
         Ok(execution) => assert!(matches!(execution.result, Err(DesktopError::Timeout))),
         Err(error) => assert!(matches!(error, DesktopError::Timeout)),
     }
-    let wait_for_desktop_output = |expected: &str| {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let snapshot = desktop.snapshot().unwrap();
-            let found = snapshot.frames.iter().any(|frame| {
-                frame
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|terminal| terminal.viewport.contents.contains(expected))
-            });
-            if found {
-                return snapshot;
-            }
-            assert!(Instant::now() < deadline, "PTY did not print {expected}");
-            thread::sleep(Duration::from_millis(2));
-        }
-    };
-    let drained = wait_for_desktop_output("PROVIDER_STATE_DRAINED_1");
+    worker.poll_program_status_checkpoints();
+    assert!(worker.pending_program_status_checkpoints.is_empty());
+    release_fifo.write_all(b"release-first-batch\n").unwrap();
+    wait_for_live_snapshot(&worker, "PROVIDER_STATE_DRAINED_1");
+    worker.publish(false);
+    let drained = desktop.snapshot().unwrap();
     assert_eq!(
         published_identities(&drained),
         admitted_identities,
@@ -806,7 +824,8 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
             },
         })
         .unwrap();
-    wait_for_desktop_output("PROVIDER_STATE_DRAIN_HOLD_2");
+    worker.command(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+    wait_for_live_snapshot(&worker, "PROVIDER_STATE_DRAIN_HOLD_2");
     let blocked_text = "x".repeat(zmux_session_runtime::INPUT_CHUNK_BYTES);
     for index in 0..BLOCKED_INPUT_CHUNKS {
         desktop
@@ -819,6 +838,7 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
                 },
             })
             .unwrap();
+        worker.command(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
     }
     let observation = make_observation();
     let observation_runtime = match &observation.action {
@@ -826,9 +846,11 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
         _ => unreachable!("provider observation fixture keeps its action type"),
     };
     let observation_admission = authorize(&observation);
-    let observation_desktop = &desktop;
+    let event = make_hook_event(Uuid::new_v4());
+    let event_admission = authorize(&event);
     let (observation_elapsed, observation_execution, event_elapsed, event_execution) =
         thread::scope(|scope| {
+            let observation_desktop = &desktop;
             let observation_call = scope.spawn(move || {
                 let started = Instant::now();
                 let result = observation_desktop.execute_authorized(
@@ -844,26 +866,65 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
                 );
                 (started.elapsed(), result)
             });
-            let request = make_hook_event(Uuid::new_v4());
-            let started = Instant::now();
-            let result = desktop.execute_authorized(
-                Request {
-                    version: 1,
-                    request_id: 120,
-                    payload: Command::AgentLifecycle {
-                        request: request.clone(),
+            let event_desktop = &desktop;
+            let event_call = scope.spawn(move || {
+                let started = Instant::now();
+                let result = event_desktop.execute_authorized(
+                    Request {
+                        version: 1,
+                        request_id: 120,
+                        payload: Command::AgentLifecycle { request: event },
                     },
-                },
-                Duration::from_millis(2700),
-                authorize(&request),
-            );
-            let event_elapsed = started.elapsed();
+                    Duration::from_millis(2700),
+                    event_admission,
+                );
+                (started.elapsed(), result)
+            });
+
+            for _ in 0..2 {
+                let envelope = receiver
+                    .recv_timeout(Duration::from_millis(2700))
+                    .expect("public lifecycle execution submits to the controlled worker");
+                let pending_before = worker.pending_program_status_checkpoints.len();
+                worker.command(envelope);
+                assert_eq!(
+                    worker.pending_program_status_checkpoints.len(),
+                    pending_before + 1,
+                    "each public lifecycle request must queue a real Session checkpoint"
+                );
+            }
+            assert_eq!(worker.pending_program_status_checkpoints.len(), 2);
+
+            // Hold the child behind its FIFO until the two actual Session
+            // checkpoints have remained pending through the asserted interval.
+            let hold_deadline = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < hold_deadline {
+                worker.poll_program_status_checkpoints();
+                assert_eq!(
+                    worker.pending_program_status_checkpoints.len(),
+                    2,
+                    "the real checkpoints must remain behind PTY backpressure until release"
+                );
+                thread::sleep(Duration::from_millis(2));
+            }
+            release_fifo.write_all(b"release-second-batch\n").unwrap();
+
+            let completion_deadline = Instant::now() + Duration::from_millis(2700);
+            while !worker.pending_program_status_checkpoints.is_empty() {
+                worker.poll_program_status_checkpoints();
+                assert!(
+                    Instant::now() < completion_deadline,
+                    "real Session checkpoints did not complete after PTY input was released"
+                );
+                thread::sleep(Duration::from_millis(2));
+            }
             let (observation_elapsed, observation_result) = observation_call.join().unwrap();
+            let (event_elapsed, event_result) = event_call.join().unwrap();
             (
                 observation_elapsed,
                 observation_result.unwrap(),
                 event_elapsed,
-                result.unwrap(),
+                event_result.unwrap(),
             )
         });
     assert!(
@@ -894,7 +955,8 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
             .hook_disposition,
         agent_lifecycle::HookDisposition::AlertCovered
     );
-    wait_for_desktop_output("PROVIDER_STATE_DRAINED_2");
+    wait_for_live_snapshot(&worker, "PROVIDER_STATE_DRAINED_2");
+    worker.publish(false);
     let final_snapshot = desktop.snapshot().unwrap();
     assert_eq!(
         final_snapshot
@@ -907,9 +969,7 @@ stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read 
     );
 
     desktop.shared.stop.store(true, Ordering::Release);
-    if let Some(worker) = desktop.worker.lock().unwrap().take() {
-        worker.join().unwrap();
-    }
+    thread::spawn(move || worker.run(receiver)).join().unwrap();
 }
 
 #[test]
