@@ -1,41 +1,35 @@
 # Status
 
+- Continuation: both scoped repairs passed independent review. Aggregate round 35 passed **765/0/7** in 263.59 seconds with unchanged source and preserved unrelated work. The native file-panel change captures failure evidence only; no accepted final app exists. Scoped commit/push and fresh hosted delivery follow.
+
 - **State:** in-progress
 - **Updated:** 2026-11-13
 - **Baseline:** `0ac5192` on `main`; protocol/parser slice committed as `d573e8b`. Integration source committed and pushed as `3b385182e43e66bde01100640b9c6cf213eac048`.
 
 ## Current delivery gates
 
-- Final source after review corrections passed aggregate **765/0/7**, 277.41
-  seconds, stable fingerprints and preserved unrelated work. Focused owner
-  tests passed 10/10. Setup sourcing fails closed with `&&`; closed stderr is
-  excluded from the actual macOS poll slice. Commit/push and hosted retry follow.
-  These changes capture evidence; no historical startup cause is claimed.
-
-- Private-file setup transport and pre-Hello diagnostics passed combined local
-  aggregate **765/0/7** in 292.23 seconds, source stable and unrelated work
-  preserved. Two new owner tests cover bounded stderr/privacy and non-reaping
-  exit/signal observations. Production review remains active before push.
-
-- Latest source pushed: `2efb76d9bcbb9e0a00015602b8bcaf81c00920de`.
-  Local aggregate **763/0/7** in 263.16 seconds; source stable and unrelated
-  work preserved. Foundation `43407437043` passed macOS **761/0/7** and Ubuntu
-  **763/0/7** at that exact source.
-- Fresh retained Ghostty `43407437492` passed: artifact `14027538458`,
-  22,998,332 bytes, SHA-256
-  `33e57a5fc6fe0a04dda8ce2531e157ff83f52e2b6f2336e197ee4505b7c40ae7`;
-  all 229 source pins matched. Both Apple compile/link and ARM engine **4/4**,
-  linked 7501 **1/1**, Session **4/4**, real-PTY 7501 Session **1/1** passed.
-  Intel execution and native-host/AppKit execution were not requested.
-- Universal `43407437131` failed its aggregate in two managed SSH provider
-  fixtures. Codex's typed readiness Python arrived visibly garbled and raised
-  SyntaxError; OpenCode entered untracked fallback with no lifecycle Hello.
-  A fixture-only private-file setup transport repair is active; a separate
-  read-only investigation covers the pre-hello exits and lost stderr evidence.
-  No historical admission or EPERM cause is inferred from these logs.
-- App build/native viewport/Programs acceptance/final upload were skipped.
-  No accepted final app download exists. Earlier scheduled-message smoke
-  passed all 16 checks at `9f2f13c`; its prior timeout cause remains unproven.
+- Latest pushed source: `ab789718c1cea30b8cf610f9839bb1b1b1b665ad`.
+  Final local aggregate **765/0/7**, 277.41 seconds, unchanged fingerprints and
+  preserved unrelated work. Owner tests passed 10/10; review P2s are fixed:
+  setup sourcing gates provider launch, and closed stderr is excluded from the
+  macOS poll slice. No historical startup cause is claimed.
+- Exact-source [Foundation 43418903359](https://github.com/ashutoshpw/zmux/actions/runs/43418903359)
+  passed macOS **763/0/7** but failed Ubuntu at the synthetic OpenCode help
+  preflight. [Universal macOS 43418903541](https://github.com/ashutoshpw/zmux/actions/runs/43418903541)
+  passed build, selection **48/48**, schedule **16/16**, and workspace reorder,
+  then failed waiting for sixteen file tabs to load. Programs and final upload
+  were skipped. See [exact-source evidence](references/hosted-final-ab78971.md).
+  The preflight root cause and per-tab failure cause remain unknown.
+  No accepted app download exists yet.
+- Private fixture files replace typed setup payloads; all tracked-provider
+  lifecycle/config/once assertions remain. Production pre-Hello EOF adds only
+  bounded stderr classes and honest non-reaping exit observations. Existing
+  deadlines, protocol ordering and child ownership remain in place.
+- Accepted retained Ghostty run `43407437492` / artifact `14027538458` records
+  source `2efb76d`; all 229 captured Git blobs match `ab78971` exactly. Its
+  Apple compile/link and ARM engine **4/4**, linked 7501 **1/1**, Session **4/4**,
+  real-PTY 7501 Session **1/1** results are reused with that explicit attribution.
+  Intel runtime and native-host/AppKit execution were not requested.
 
 ## Earlier overall acceptance notes
 

@@ -2598,7 +2598,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     let opencode = bin.join("opencode");
     fs::write(
         &opencode,
-        "#!/bin/sh\nexec node \"$FIXTURE_OPENCODE_RUNNER\" \"$FIXTURE_OPENCODE_PLUGIN_HOST\" \"$FIXTURE_OPENCODE_ROOT_SESSION\" \"$FIXTURE_OPENCODE_REPORT\" \"$@\"\n",
+        "#!/bin/sh\nif [ \"$#\" -eq 1 ] && [ \"$1\" = \"--help\" ] && [ \"${FIXTURE_OPENCODE_HELP_DELAY_MS+x}\" != x ]; then\n    if [ \"${FIXTURE_OPENCODE_STANDALONE_SUPPORT-}\" = \"0\" ]; then\n        printf 'FLAGS\\n  --server string  Connect to a server\\n'\n    else\n        printf 'FLAGS\\n  --standalone  Run with a private server\\n'\n    fi\n    exit 0\nfi\nexec node \"$FIXTURE_OPENCODE_RUNNER\" \"$FIXTURE_OPENCODE_PLUGIN_HOST\" \"$FIXTURE_OPENCODE_ROOT_SESSION\" \"$FIXTURE_OPENCODE_REPORT\" \"$@\"\n",
     )
     .unwrap();
     fs::set_permissions(&opencode, fs::Permissions::from_mode(0o700)).unwrap();

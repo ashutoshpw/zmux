@@ -407,10 +407,19 @@ enum FilePanelSmoke {
         guard manyOpened["ok"] as? Bool == true, (manyOpened["items"] as? [[String: Any]])?.count == 16 else {
             throw failure("opening sixteen files at once did not report sixteen successes: \(manyOpened)")
         }
-        try await wait("sixteen simultaneous file tabs loaded") {
-            guard let snapshot = coordinator.snapshot else { return false }
-            let panels = fileSurfaces(snapshot).filter { surface in surface.file.map { manyPaths.contains($0.path) } == true }
-            return panels.count == 16 && panels.allSatisfy { coordinator.files[$0.id]?.isLoaded == true }
+        do {
+            try await wait("sixteen simultaneous file tabs loaded") {
+                guard let snapshot = coordinator.snapshot else { return false }
+                let panels = fileSurfaces(snapshot).filter { surface in surface.file.map { manyPaths.contains($0.path) } == true }
+                return panels.count == 16 && panels.allSatisfy { coordinator.files[$0.id]?.isLoaded == true }
+            }
+        } catch {
+            if error is CancellationError { throw error }
+            if Task.isCancelled { throw CancellationError() }
+            guard let original = error as? BridgeFailure else { throw error }
+            throw BridgeFailure(
+                message: original.message + "; " + fileLoadTimeoutDiagnostic(paths: manyPaths, coordinator: coordinator)
+            )
         }
         guard let manySnapshot = coordinator.snapshot else { throw failure("no snapshot after the sixteen-file open") }
         let manyPanels = fileSurfaces(manySnapshot).compactMap { surface in
@@ -461,6 +470,42 @@ enum FilePanelSmoke {
     private static func fileSurface(_ snapshot: DesktopSnapshot, _ id: UInt64) -> Surface? {
         fileSurfaces(snapshot).first { $0.id == id }
     }
+    @MainActor
+    private static func fileLoadTimeoutDiagnostic(paths: [String], coordinator: ApplicationCoordinator) -> String {
+        let surfaces = coordinator.snapshot.map { fileSurfaces($0) } ?? []
+        let expectedPaths = Set(paths)
+        let matchingSurfaces = surfaces.filter { surface in
+            surface.file.map { expectedPaths.contains($0.path) } == true
+        }
+        let tabStatuses = paths.enumerated().map { item -> String in
+            let index = item.offset
+            guard let surface = matchingSurfaces.first(where: { $0.file?.path == item.element }) else {
+                return "\(index):surface_missing"
+            }
+            guard let view = coordinator.files[surface.id] else {
+                return "\(index):view_missing"
+            }
+            if let code = view.failureCode {
+                return "\(index):error:\(boundedDiagnosticCode(code))"
+            }
+            return "\(index):\(view.isLoaded ? "loaded" : "loading")"
+        }
+        let gate = coordinator.fileLoadGate
+        return "matching_surfaces=\(matchingSurfaces.count)/\(paths.count), tabs=[\(tabStatuses.joined(separator: ","))], " +
+            "gate={inFlight:\(gate.inFlightCount),waiting:\(gate.waitingCount),peakInFlight:\(gate.peakInFlightCount),peakWaiting:\(gate.peakWaitingCount)}"
+    }
+
+    @MainActor
+    private static func boundedDiagnosticCode(_ code: String) -> String {
+        let bytes = code.utf8.prefix(32).map { byte -> UInt8 in
+            switch byte {
+            case 48...57, 65...90, 97...122, 95: byte
+            default: 95
+            }
+        }
+        return bytes.isEmpty ? "unknown" : String(decoding: bytes, as: UTF8.self)
+    }
+
     private static func modelDirty(_ coordinator: ApplicationCoordinator, _ id: UInt64) -> Bool? {
         coordinator.snapshot.flatMap { fileSurface($0, id) }?.file?.dirty
     }

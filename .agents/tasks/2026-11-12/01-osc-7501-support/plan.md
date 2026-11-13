@@ -137,3 +137,10 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/managed-ssh-setup-transport-recheck.md](references/managed-ssh-setup-transport-recheck.md) — scoped review and repaired fail-closed source/launch chain.
 - [references/managed-ssh-prehello-exit-evidence.md](references/managed-ssh-prehello-exit-evidence.md) — bounded stderr classes and non-reaping exit observations for pre-Hello EOF only.
 - [references/managed-ssh-prehello-exit-evidence-recheck.md](references/managed-ssh-prehello-exit-evidence-recheck.md) — production diagnostic review, macOS closed-descriptor P2 fixed by excluding it from the poll prefix.
+- [references/hosted-final-ab78971.md](references/hosted-final-ab78971.md) — macOS Foundation and workspace/scheduler acceptance; Ubuntu preflight and native sixteen-file load delivery blockers.
+- [references/opencode-help-preflight-diagnosis.md](references/opencode-help-preflight-diagnosis.md) — synthetic static help removes unnecessary Node startup; exact hosted cause remains unproven.
+- [references/native-file-panel-load-diagnosis.md](references/native-file-panel-load-diagnosis.md) — sixteen-item open succeeded; bounded per-tab/gate failure state needed to locate load timeout.
+- [references/opencode-help-preflight-repair.md](references/opencode-help-preflight-repair.md) — exact undelayed synthetic help shortcut; retained Node delayed-child cleanup and provider owner checks.
+- [references/native-file-panel-load-evidence.md](references/native-file-panel-load-evidence.md) — pre-cleanup per-tab status and gate counts preserve original batch/deadline; cause remains unknown.
+- [references/opencode-help-preflight-recheck.md](references/opencode-help-preflight-recheck.md) — independent scoped acceptance; exact help dispatch and existing owner assertions preserved.
+- [references/native-file-panel-load-evidence-recheck.md](references/native-file-panel-load-evidence-recheck.md) — independent source acceptance of bounded diagnostics and unchanged sixteen-tab contract.
