@@ -6,6 +6,38 @@
 
 ## Current delivery gates
 
+- Native receipt diagnostic slice passed final local aggregate **763/0/7**,
+  261.59 seconds, source stable and unrelated work preserved. Independent
+  scoped review accepted; parent repaired its bounded-read P3 and passed
+  focused bounds/privacy probes. Commit/push and one instrumented native run
+  follow. No functional scheduler repair or app delivery is claimed.
+
+- Scheduled receipt diagnosis found a native ABI nonzero-error boundary, but
+  retained evidence lacks the status number and private RPC action log. A
+  diagnostic-only implementation is active: capture a bounded status/class,
+  observable UI stage and allowlisted RPC action summary before cleanup.
+  Keep one create, one receipt-status query, existing deadlines and no replay.
+  No functional scheduler fix is yet supported by the evidence.
+
+- Universal `43376189745` at `428e47d` passed aggregate checks, universal app
+  build and terminal-selection acceptance. It then failed packaged scheduled
+  messages smoke: after the deliberate lost-create-reply Unknown state, Check
+  Request Status did not select one populated job before the fixture deadline.
+  Exact evidence is in the new hosted reference. Read-only receipt-path
+  diagnosis is active; no cause is inferred from the timeout alone.
+  Programs/sidebar acceptance and final upload were skipped.
+
+- Latest pushed source is `428e47d42d8b6474cbb1770c003e3b22995fd144`.
+  The native metadata compile-input repair passed local input/PTY validation
+  and aggregate **763/0/7** in 263.03 seconds; unrelated work is preserved.
+  [Universal macOS 43376189745](https://github.com/ashutoshpw/zmux/actions/runs/43376189745)
+  is running. Its aggregate/native checks and final artifact remain required.
+- The helper-only paths did not trigger Foundation; its latest Linux/macOS
+  acceptance remains at `2e2c9d3`. All 229 retained Ghostty source pins were
+  rechecked against Git blobs at `428e47d` and match exactly, so accepted linked
+  execution is reused with explicit earlier artifact source attribution.
+  No new engine or linkage workflow was dispatched.
+
 - Source `2e2c9d3`: Foundation passed Linux **763/0/7** and macOS **761/0/7**;
   retained Ghostty linkage passed, all 229 source pins matched, both Apple
   compile/link and all ARM engine/Session 7501 execution passed.

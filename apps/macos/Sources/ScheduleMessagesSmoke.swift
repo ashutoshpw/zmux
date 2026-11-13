@@ -238,17 +238,22 @@ enum ScheduleMessagesSmoke {
             evidence["unknown_outcome_ui_exercised"] = true
             append("lost_create_reply_enters_unknown_outcome_ui", to: &evidence)
             try click(controls.requestStatus, named: "Check Request Status")
-            try await waitUntil("applied create receipt selecting one populated job") {
-                guard let row = Self.rowIndex(message: originalMessage, in: controls.table) else { return false }
-                return controls.requestStatus.isHidden
-                    && controls.table.numberOfRows == 1
-                    && controls.table.selectedRow == row
-                    && Self.cellText(column: 2, row: row, in: controls.table) == firstDeadline
-                    && Self.cellText(column: 3, row: row, in: controls.table) == "pending · v1"
-                    && controls.message.string == originalMessage
-                    && controls.deadline.stringValue == firstDeadline
-                    && controls.save.title == "Save Changes"
-                    && !controls.save.isEnabled
+            do {
+                try await waitUntil("applied create receipt selecting one populated job") {
+                    guard let row = Self.rowIndex(message: originalMessage, in: controls.table) else { return false }
+                    return controls.requestStatus.isHidden
+                        && controls.table.numberOfRows == 1
+                        && controls.table.selectedRow == row
+                        && Self.cellText(column: 2, row: row, in: controls.table) == firstDeadline
+                        && Self.cellText(column: 3, row: row, in: controls.table) == "pending · v1"
+                        && controls.message.string == originalMessage
+                        && controls.deadline.stringValue == firstDeadline
+                        && controls.save.title == "Save Changes"
+                        && !controls.save.isEnabled
+                }
+            } catch {
+                evidence["receipt_status_diagnostics"] = Self.receiptStatusDiagnostics(in: scheduleWindow)
+                throw error
             }
             append("applied_create_receipt_selects_one_populated_job_without_duplicate", to: &evidence)
 
@@ -897,6 +902,72 @@ enum ScheduleMessagesSmoke {
     private static func visibleText(in window: NSWindow) -> String {
         guard let content = window.contentView else { return "" }
         return descendants(content).compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: "\n")
+    }
+
+    private static func receiptStatusDiagnostics(in window: NSWindow?) -> [String: Any] {
+        let visible = window.map { visibleText(in: $0) } ?? ""
+        let nativeStatus = nativeScheduleABIStatus(in: visible)
+        let stage: String?
+        let stageSource: String
+        if visible.contains("Applied request receipt reconciled.") {
+            stage = "receipt_reconciled"
+            stageSource = "visible_status"
+        } else if visible.contains("Applied request receipt verified. Loading the created job and refreshing remote queue and history.")
+                    || visible.contains("Refreshing remote scheduler, targets, pending jobs, and history") {
+            stage = "queue_refresh"
+            stageSource = "visible_status"
+        } else if visible.contains("Checking the original request receipt. The mutation will not be replayed.") {
+            stage = "receipt_status_or_show"
+            stageSource = "visible_status"
+        } else if nativeStatus != nil {
+            // The status lookup and the subsequent show request share the production bridge call.
+            // The visible bridge error cannot distinguish those two requests.
+            stage = "receipt_status_or_show"
+            stageSource = "native_schedule_request_error"
+        } else {
+            stage = nil
+            stageSource = "none"
+        }
+
+        let stageValue: Any
+        if let stage {
+            stageValue = stage
+        } else {
+            stageValue = NSNull()
+        }
+        let nativeABI: Any
+        if let nativeStatus {
+            nativeABI = ["status": Int(nativeStatus), "class": nativeScheduleABIClass(nativeStatus)] as [String: Any]
+        } else {
+            nativeABI = NSNull()
+        }
+        return [
+            "ui_stage": stageValue,
+            "ui_stage_source": stageSource,
+            "native_abi": nativeABI
+        ]
+    }
+
+    private static func nativeScheduleABIStatus(in visibleText: String) -> Int32? {
+        let prefix = "Native scheduleRequest(identityNamespace:surface:expectedSession:request:) failed ("
+        for rawLine in visibleText.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            guard line.hasPrefix(prefix), line.hasSuffix(")") else { continue }
+            let digits = String(line.dropFirst(prefix.count).dropLast())
+            guard let status = Int32(digits), status != 0, String(status) == digits else { continue }
+            return status
+        }
+        return nil
+    }
+
+    private static func nativeScheduleABIClass(_ status: Int32) -> String {
+        switch status {
+        case -1: "invalid_handle"
+        case -2: "invalid_input"
+        case -3, -5: "capacity"
+        case -4: "busy"
+        default: "internal"
+        }
     }
 
     private static func descendants(_ view: NSView) -> [NSView] {

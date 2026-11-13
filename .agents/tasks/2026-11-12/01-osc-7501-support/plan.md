@@ -116,3 +116,7 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/session-exit-snapshot-fixture-repair.md](references/session-exit-snapshot-fixture-repair.md) — original-deadline Busy handling in real Session reconnect exit observation.
 - [references/hosted-final-2e2c9d3.md](references/hosted-final-2e2c9d3.md) — both-platform Foundation and linked engine acceptance, native fixture compile-input failure after app build.
 - [references/native-selection-metadata-input-repair.md](references/native-selection-metadata-input-repair.md) — production ProgramAlert source added to shared native fixture compile/hash inputs.
+- [references/hosted-final-428e47d.md](references/hosted-final-428e47d.md) — universal build and selection passed; scheduled-message receipt timeout stopped packaged/native Programs delivery.
+- [references/native-schedule-receipt-diagnosis.md](references/native-schedule-receipt-diagnosis.md) — native ABI failure boundary and bounded sanitized diagnostics needed before functional repair.
+- [references/native-schedule-receipt-evidence.md](references/native-schedule-receipt-evidence.md) — bounded numeric ABI status and sanitized RPC action summary for the next packaged experiment.
+- [references/native-schedule-receipt-evidence-recheck.md](references/native-schedule-receipt-evidence-recheck.md) — scoped diagnostics acceptance and repaired bounded-read P3.

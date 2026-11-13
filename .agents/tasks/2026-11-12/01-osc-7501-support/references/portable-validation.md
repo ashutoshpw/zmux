@@ -81,3 +81,15 @@ ledger matched. The helper diff remains exactly the reviewed production-source
 entry, and its input check passed independently. The earlier 267.16-second
 receipt is archived as `check-round24`. Native compile and app acceptance remain
 hosted gates.
+
+Bounded native schedule receipt diagnostics aggregate: **763/0/7**, 261.27
+seconds; source fingerprints unchanged and unrelated work preserved. Parent
+added bounded actual log reads and visible diagnostic-attachment failure warnings.
+Independent scoped review remains pending before the instrumented hosted run.
+The prior complete 263.03-second receipt is archived as `check-round25`.
+
+After the diagnostic-read P3 correction, final aggregate passed **763/0/7**
+in 261.59 seconds, unchanged source fingerprints and preserved unrelated work.
+Report/config/log actual reads are capped; temporary functional bounds/privacy
+probes passed. Review accepted the scope, ABI classes and no-replay semantics.
+Prior complete 261.27-second receipt is archived as `check-round26`.

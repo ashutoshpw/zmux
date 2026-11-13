@@ -383,6 +383,121 @@ def cloud_terminal_fixture():
         for worker in workers:
             worker.join(timeout=2)
 
+
+def attach_schedule_rpc_summary(report_path, fixture_configuration):
+    """Retain allowlisted scheduler action evidence before the private fixture is removed."""
+    try:
+        with report_path.open("rb") as report_input:
+            report_bytes = report_input.read(1024 * 1024 + 1)
+        if len(report_bytes) > 1024 * 1024:
+            return False
+        evidence = json.loads(report_bytes)
+        if not isinstance(evidence, dict) or evidence.get("scope") != "native_schedule_messages":
+            return False
+    except (OSError, TypeError, ValueError, RecursionError):
+        return False
+
+    categories = (
+        "status", "receipt_status", "targets", "list", "history", "setup",
+        "setup_check", "create", "show", "edit", "cancel", "other",
+    )
+    summary = {
+        "available": False,
+        "reason": "fixture_data_unavailable",
+        "action_counts": {},
+        "action_order": [],
+        "action_order_truncated": False,
+        "malformed_records": 0,
+        "dropped_create_observed": None,
+        "create_count_before_first_receipt_status": None,
+        "receipt_status_arrived_after_dropped_create": None,
+    }
+    try:
+        with fixture_configuration.open("rb") as fixture_input:
+            fixture_bytes = fixture_input.read(64 * 1024 + 1)
+        if len(fixture_bytes) > 64 * 1024:
+            summary["reason"] = "fixture_configuration_over_bound"
+        else:
+            fixture = json.loads(fixture_bytes)
+            fixture_root = Path(fixture["root"]).resolve()
+            request_log = Path(fixture["schedulerRpcRequestLog"]).resolve()
+            drop_marker = Path(fixture["schedulerRpcDropResponseMarker"]).resolve()
+            if request_log.parent != fixture_root or drop_marker.parent != fixture_root:
+                summary["reason"] = "fixture_paths_outside_private_root"
+            elif request_log.stat().st_size > 1024 * 1024:
+                summary["reason"] = "request_log_over_bound"
+            else:
+                with request_log.open("rb") as request_input:
+                    request_bytes = request_input.read(1024 * 1024 + 1)
+                if len(request_bytes) > 1024 * 1024:
+                    raise ValueError("request log grew beyond its diagnostic bound")
+                counts = dict.fromkeys(categories, 0)
+                actions, creates, receipt_statuses = [], [], []
+                malformed_records = records_seen = 0
+                for index, line in enumerate(request_bytes.splitlines()):
+                    if not line:
+                        continue
+                    records_seen += 1
+                    category = "other"
+                    if len(line) <= 16 * 1024:
+                        try:
+                            request = json.loads(line)
+                            action = request.get("action") if isinstance(request, dict) else None
+                            name = action.get("action") if isinstance(action, dict) else None
+                            if name == "status":
+                                category = "receipt_status" if isinstance(action.get("receipt_request_id"), str) else "status"
+                            elif name in categories:
+                                category = name
+                        except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+                            malformed_records += 1
+                    else:
+                        malformed_records += 1
+                    counts[category] += 1
+                    if len(actions) < 128:
+                        actions.append(category)
+                    if category == "create":
+                        creates.append(index)
+                    elif category == "receipt_status":
+                        receipt_statuses.append(index)
+
+                first_receipt_status = receipt_statuses[0] if receipt_statuses else None
+                if first_receipt_status is not None:
+                    summary["create_count_before_first_receipt_status"] = sum(
+                        index < first_receipt_status for index in creates
+                    )
+                dropped_create = (
+                    evidence.get("unknown_outcome_ui_exercised") is True
+                    and not drop_marker.exists()
+                    and bool(creates)
+                )
+                summary.update({
+                    "available": True,
+                    "reason": None,
+                    "action_counts": counts,
+                    "action_order": actions,
+                    "action_order_truncated": records_seen > len(actions),
+                    "records_seen": records_seen,
+                    "malformed_records": malformed_records,
+                    "dropped_create_observed": dropped_create,
+                    "receipt_status_arrived_after_dropped_create": (
+                        any(index > creates[0] for index in receipt_statuses) if dropped_create else None
+                    ),
+                })
+    except (OSError, KeyError, TypeError, ValueError, RecursionError, RuntimeError):
+        summary["reason"] = "fixture_data_unavailable"
+    temporary = report_path.with_name(report_path.name + ".diagnostic.tmp")
+    try:
+        evidence["scheduler_rpc_summary"] = summary
+        temporary.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+        temporary.replace(report_path)
+        return True
+    except (OSError, TypeError, ValueError, RecursionError):
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
 with local_tmux_fixture() as native_environment, scheduler_fixture() as scheduler_environment, browser_fixture(), cloud_terminal_fixture() as cloud_origins, fixture_module.native_ssh_fixture(
         dist / "native-ssh-fixture.json", dist / "native-sshd.log",
         session_environment=scheduler_environment["session_environment"], scheduler_rpc_request_log=True,
@@ -502,6 +617,8 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
             str(dist / "native-ssh-fixture.json")
         ], check=True, timeout=180)
     except Exception:
+        if not attach_schedule_rpc_summary(schedule_report, dist / "native-ssh-fixture.json"):
+            print("Scheduled-message RPC diagnostic summary is unavailable")
         for path in (schedule_stdout, schedule_stderr):
             if path.exists(): print(path.read_text(errors="replace"))
         if schedule_report.is_file():
@@ -516,6 +633,9 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
                 print("Scheduled-message smoke report failure: " + detail)
         diagnose_failure()
         raise
+    else:
+        if not attach_schedule_rpc_summary(schedule_report, dist / "native-ssh-fixture.json"):
+            print("Scheduled-message RPC diagnostic summary is unavailable")
     if not schedule_report.exists():
         for path in (schedule_stdout, schedule_stderr):
             if path.exists(): print(path.read_text(errors="replace"))
