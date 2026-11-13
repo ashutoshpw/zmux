@@ -801,7 +801,17 @@ fn socket_password_scrubbing_wins_over_application_environment_overrides() {
 #[test]
 fn input_and_resize_reach_the_real_terminal() {
     let mut session = launch("read line; stty size; printf '\\naccepted:%s\\n' \"$line\"");
-    session.resize(Size { rows: 12, cols: 45 }).unwrap();
+    let size = Size { rows: 12, cols: 45 };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match session.resize(size) {
+            Ok(()) => break,
+            Err(SessionError::Busy) => {}
+            Err(error) => panic!("session resize failed: {error}"),
+        }
+        assert!(Instant::now() < deadline, "session resize stayed busy");
+        thread::sleep(Duration::from_millis(5));
+    }
     wait_for(&session, |s| s.viewport.size == Size { rows: 12, cols: 45 });
     session.send_input(b"test-input\n").unwrap();
     let snapshot = wait_for(&session, |s| s.state == State::Exited);
@@ -897,7 +907,9 @@ fn output_flood_does_not_prevent_cancel_and_leader_reaping() {
 #[test]
 fn malformed_requests_do_not_change_session_geometry_or_reach_input() {
     let mut session = launch("exec sleep 60");
-    let before = session.snapshot().unwrap().viewport.size;
+    let before = wait_for(&session, |s| s.state == State::Running)
+        .viewport
+        .size;
     assert!(session.resize(Size { rows: 0, cols: 60 }).is_err());
     assert!(matches!(
         session.send_input(&vec![b'x'; INPUT_CHUNK_BYTES + 1]),
@@ -907,7 +919,8 @@ fn malformed_requests_do_not_change_session_geometry_or_reach_input() {
         session.send_input(b""),
         Err(SessionError::InputSize)
     ));
-    assert_eq!(session.snapshot().unwrap().viewport.size, before);
+    let after = wait_for(&session, |s| s.state == State::Running);
+    assert_eq!(after.viewport.size, before);
     session.shutdown(Duration::from_secs(3)).unwrap();
 }
 

@@ -480,6 +480,7 @@ def invoke_session_hook(helper, payload):
 
 
 def provider():
+    print("CODEX_PROVIDER_PROCESS_ENTERED", flush=True)
     args = sys.argv[1:]
     calls = os.environ.get("ZMUX_FAKE_CODEX_CALLS")
     if calls:
@@ -513,6 +514,7 @@ def provider():
         )
         != 0
     ):
+        print("CODEX_PROVIDER_TRACKING_UNAVAILABLE", flush=True)
         stop_daemon()
         return 81
     print("CODEX_FIXTURE_READY", flush=True)

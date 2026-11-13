@@ -124,3 +124,10 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/workspace-drag-viewport-repair.md](references/workspace-drag-viewport-repair.md) — fixture honors captured AppKit minimum while retaining real overflow, scroll and drag invariants.
 - [references/hosted-final-0742e26.md](references/hosted-final-0742e26.md) — aggregate provider lifecycle snapshot Busy stopped the native sizing retry before app build.
 - [references/agent-lifecycle-snapshot-fixture-repair.md](references/agent-lifecycle-snapshot-fixture-repair.md) — bounded shared reads preserve lifecycle, alert and generation assertions through snapshot contention.
+- [references/hosted-final-6230bd4.md](references/hosted-final-6230bd4.md) — Foundation Codex route fallback and separate universal exact event receipt failure.
+- [references/hook-event-receipt-timeout-diagnosis.md](references/hook-event-receipt-timeout-diagnosis.md) — positive receipt read inherited the stale negative wait despite a longer bounded owner deadline.
+- [references/managed-ssh-codex-admission-diagnosis.md](references/managed-ssh-codex-admission-diagnosis.md) — tracked marker requires hook success; explicit stream-readiness precondition missing and historical admission cause unproven.
+- [references/hook-event-receipt-deadline-repair.md](references/hook-event-receipt-deadline-repair.md) — negative-control timeout separated from the positive read under one production-aligned deadline.
+- [references/managed-ssh-codex-readiness-repair.md](references/managed-ssh-codex-readiness-repair.md) — real lifecycle readiness before tracked fixture launch and independent process/tracking markers.
+- [references/managed-ssh-fixture-repairs-recheck.md](references/managed-ssh-fixture-repairs-recheck.md) — independent acceptance of lifecycle readiness and receipt deadline fixture repairs.
+- [references/session-resize-contention-fixture-repair.md](references/session-resize-contention-fixture-repair.md) — same-size coalesced Busy retry retains actual PTY geometry and exact input checks.

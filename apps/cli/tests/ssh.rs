@@ -178,6 +178,83 @@ fn screen(socket: &Path, surface: &str, predicate: impl Fn(&Value) -> bool) -> V
     }
 }
 
+fn has_exact_line(contents: &str, expected: &str) -> bool {
+    contents.lines().any(|line| line == expected)
+}
+
+const MANAGED_CODEX_READY_MARKER: &str =
+    concat!("ZMUX_", "MANAGED_", "SSH_", "CODEX_", "LIFECYCLE_", "READY");
+const MANAGED_CODEX_READY_FAILED_MARKER: &str = concat!(
+    "ZMUX_",
+    "MANAGED_",
+    "SSH_",
+    "CODEX_",
+    "LIFECYCLE_",
+    "FAILED"
+);
+const CODEX_READINESS_PROBE: &str = r#"python3 - <<'PY'
+import os
+import stat
+import time
+import uuid
+
+def generation_is_ready():
+    nonce = os.environ.get("ZMUX_AGENT_LIFECYCLE_NONCE", "")
+    root = os.environ.get("ZMUX_SHELL_INTEGRATION_DIRECTORY", "")
+    if (
+        len(nonce) != 32
+        or any(character not in "0123456789abcdef" for character in nonce)
+        or root != f"/tmp/zmux-shell-{nonce}"
+    ):
+        return False
+    try:
+        root_metadata = os.stat(root, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(root_metadata.st_mode)
+            or root_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(root_metadata.st_mode) != 0o700
+        ):
+            return False
+    except OSError:
+        return False
+
+    path = os.path.join(root, "agent-lifecycle-generation")
+    deadline = time.monotonic() + 8.0
+    while True:
+        try:
+            descriptor = os.open(
+                path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+            )
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                    or metadata.st_nlink != 1
+                    or metadata.st_size > 64
+                ):
+                    return False
+                value = os.read(descriptor, 65).decode("ascii").strip()
+            finally:
+                os.close(descriptor)
+            return uuid.UUID(value).int != 0
+        except FileNotFoundError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.05, remaining))
+        except (OSError, UnicodeError, ValueError, TypeError):
+            return False
+
+if generation_is_ready():
+    print("ZMUX_" + "MANAGED_" + "SSH_" + "CODEX_" + "LIFECYCLE_" + "READY", flush=True)
+    raise SystemExit(0)
+print("ZMUX_" + "MANAGED_" + "SSH_" + "CODEX_" + "LIFECYCLE_" + "FAILED", flush=True)
+raise SystemExit(75)
+PY
+"#;
+
 fn upload(socket: &Path, id: u64, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -321,6 +398,30 @@ fn managed_ssh_codex_uses_root_thread_events_and_ignores_stop_hook_decisions() {
         .as_str()
         .unwrap();
     screen(&socket, surface, |snapshot| snapshot["state"] == "running");
+    assert!(
+        !calls.exists() && !app_server_pid.exists(),
+        "Codex fixture ran before the managed lifecycle readiness probe"
+    );
+    json(
+        &socket,
+        &["send-text", "--surface", surface, CODEX_READINESS_PROBE],
+    );
+    let readiness = screen(&socket, surface, |snapshot| {
+        snapshot["contents"].as_str().is_some_and(|contents| {
+            has_exact_line(contents, MANAGED_CODEX_READY_MARKER)
+                || has_exact_line(contents, MANAGED_CODEX_READY_FAILED_MARKER)
+        })
+    });
+    let readiness_contents = readiness["contents"].as_str().unwrap_or_default();
+    assert!(
+        has_exact_line(readiness_contents, MANAGED_CODEX_READY_MARKER),
+        "managed SSH Codex lifecycle readiness failed before the fixture daemon or provider launch; provider calls exist={}; terminal={readiness_contents}",
+        calls.exists()
+    );
+    assert!(
+        !calls.exists() && !app_server_pid.exists(),
+        "Codex fixture ran before the managed lifecycle readiness barrier"
+    );
     let command = format!(
         "export PATH='{}':$PATH; export ZMUX_FAKE_CODEX_STATE='{}'; export ZMUX_FAKE_CODEX_REPORT='{}'; export ZMUX_FAKE_CODEX_CALLS='{}'; export ZMUX_FAKE_CODEX_STOP_PROBE='{}'; export ZMUX_FAKE_CODEX_STOP_RESULT='{}'; export ZMUX_FAKE_CODEX_RELEASE='{}'; export ZMUX_FAKE_CODEX_SOCKET='{}'; export ZMUX_FAKE_CODEX_DAEMON_PID='{}'; command codex fixture-daemon-start && codex\n",
         bin.display(),
@@ -334,11 +435,21 @@ fn managed_ssh_codex_uses_root_thread_events_and_ignores_stop_hook_decisions() {
         app_server_pid.display(),
     );
     json(&socket, &["send-text", "--surface", surface, &command]);
-    screen(&socket, surface, |snapshot| {
-        snapshot["contents"]
-            .as_str()
-            .is_some_and(|contents| contents.contains("CODEX_FIXTURE_READY"))
+    let startup = screen(&socket, surface, |snapshot| {
+        snapshot["contents"].as_str().is_some_and(|contents| {
+            has_exact_line(contents, "CODEX_FIXTURE_READY")
+                || has_exact_line(contents, "CODEX_PROVIDER_TRACKING_UNAVAILABLE")
+        })
     });
+    let startup_contents = startup["contents"].as_str().unwrap_or_default();
+    assert!(
+        has_exact_line(startup_contents, "CODEX_PROVIDER_PROCESS_ENTERED"),
+        "synthetic Codex did not enter its provider invocation branch; terminal={startup_contents}"
+    );
+    assert!(
+        has_exact_line(startup_contents, "CODEX_FIXTURE_READY"),
+        "synthetic Codex entered its provider branch but SessionStart tracking was unavailable; the process-entry marker does not establish a tracked launch; terminal={startup_contents}"
+    );
 
     let initial = wait_remote_provider(&desktop, Activity::Idle);
     assert_eq!(initial.connection, Connection::Connected);

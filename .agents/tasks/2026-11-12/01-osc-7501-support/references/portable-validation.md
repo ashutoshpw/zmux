@@ -105,3 +105,12 @@ seconds, unchanged source fingerprints and unrelated preservation hashes.
 One-shot reads reuse the existing bounded helper; live reads retain the original
 eight-second deadline. Lifecycle/alert/generation assertions and all actions
 remain. Previous complete 259.96-second receipt is archived as `check-round28`.
+
+Combined managed SSH readiness, absolute receipt deadline and coalesced resize
+fixture final aggregate: **763/0/7**, 263.16 seconds, unchanged source fingerprints
+and unrelated preservation hashes. Independent SSH fixture review accepted with
+no findings. Parent retained explicit malformed-geometry comparison after a
+Busy-aware read. The earlier complete 257.26-second receipt is archived as
+`check-round31`; the observed resize Busy failure remains `check-round30`.
+One captured Session test input changed, requiring fresh retained linkage
+source attribution; engine library bytes need no rebuild.

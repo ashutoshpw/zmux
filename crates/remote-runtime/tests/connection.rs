@@ -460,9 +460,8 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
     let receipt_endpoint = UnixDatagram::bind(&receipt_path).expect("bind per-hook receipt socket");
     fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600))
         .expect("secure per-hook receipt socket");
-    receipt_endpoint
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .expect("bound stale-receipt wait");
+    // Mirrors RECEIPT_WAIT_SECONDS in the production Claude hook.
+    const RECEIPT_WAIT_BUDGET: Duration = Duration::from_millis(1_800);
     let event = serde_json::json!({
         "name":"Notification",
         "session_id":provider_session,
@@ -476,14 +475,19 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         "receipt_requested":true,
         "event":event.clone()
     });
-    let writer_script = r#"import json,os,sys,time; root,record=sys.argv[1:]; frame=json.loads(record); frame["receipt_deadline"]=time.monotonic()+1.5; data=json.dumps(frame,separators=(",",":" )).encode()+b"\n"; fd=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC); os.write(fd,data); os.close(fd)"#;
+    let writer_script = r#"import json,os,sys,time; root,record,budget=sys.argv[1:]; frame=json.loads(record); frame["receipt_deadline"]=time.monotonic()+float(budget); data=json.dumps(frame,separators=(",",":" )).encode()+b"\n"; fd=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC); os.write(fd,data); os.close(fd)"#;
     let write_command = format!(
-        "python3 -c {} {} {}",
+        "python3 -c {} {} {} {}",
         shell_quote(writer_script),
         shell_quote(&root),
-        shell_quote(&record.to_string())
+        shell_quote(&record.to_string()),
+        shell_quote(&RECEIPT_WAIT_BUDGET.as_secs_f64().to_string())
     );
     let writer = connection.operation_spec(&write_command).unwrap();
+    // This local deadline starts before SSH writer execution, so its budget also
+    // includes setup time and is conservative relative to the remote event deadline.
+    let receipt_budget_started = Instant::now();
+    let receipt_deadline = receipt_budget_started + RECEIPT_WAIT_BUDGET;
     let output = Command::new(&writer.program)
         .args(&writer.args)
         .output()
@@ -522,6 +526,9 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
     )
     .unwrap();
     let mut datagram = [0; 512];
+    receipt_endpoint
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .expect("bound stale-generation negative-control wait");
     assert!(matches!(
         receipt_endpoint.recv(&mut datagram),
         Err(error)
@@ -531,6 +538,13 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
             )
     ));
 
+    let remaining_before_send = receipt_deadline.saturating_duration_since(Instant::now());
+    assert!(
+        !remaining_before_send.is_zero(),
+        "local receipt deadline expired before valid receipt send (elapsed={}ms; remaining={}ms)",
+        receipt_budget_started.elapsed().as_millis(),
+        remaining_before_send.as_millis()
+    );
     let valid_receipt = zmux_remote_runtime::agent_lifecycle::ClientFrame::Receipt {
         version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
         nonce: nonce.remote_lifecycle_token().parse().unwrap(),
@@ -544,9 +558,24 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         serde_json::to_string(&valid_receipt).unwrap()
     )
     .unwrap();
-    let length = receipt_endpoint
-        .recv(&mut datagram)
-        .expect("valid exact event receipt reaches its per-hook socket");
+    let remaining_for_read = receipt_deadline.saturating_duration_since(Instant::now());
+    assert!(
+        !remaining_for_read.is_zero(),
+        "local receipt deadline expired after valid receipt send (elapsed={}ms; remaining={}ms)",
+        receipt_budget_started.elapsed().as_millis(),
+        remaining_for_read.as_millis()
+    );
+    receipt_endpoint
+        .set_read_timeout(Some(remaining_for_read))
+        .expect("bound valid-receipt read to remaining absolute deadline");
+    let length = receipt_endpoint.recv(&mut datagram).unwrap_or_else(|error| {
+        let remaining = receipt_deadline.saturating_duration_since(Instant::now());
+        panic!(
+            "valid exact event receipt did not reach its per-hook socket before the local deadline (elapsed={}ms; remaining={}ms; receive error: {error})",
+            receipt_budget_started.elapsed().as_millis(),
+            remaining.as_millis()
+        )
+    });
     let receipt: serde_json::Value = serde_json::from_slice(&datagram[..length]).unwrap();
     assert_eq!(receipt["kind"], "receipt");
     assert_eq!(receipt["event_id"], hook_id.to_string());

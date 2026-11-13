@@ -6,6 +6,35 @@
 
 ## Current delivery gates
 
+- Combined SSH readiness, remaining receipt deadline and coalesced resize
+  fixture repairs passed final aggregate **763/0/7** in 263.16 seconds; source
+  fingerprints unchanged and unrelated work preserved. SSH independent review
+  accepted with no findings; original geometry/input/lineage checks remain.
+  Commit/push and fresh Foundation/universal/retained-linkage attribution follow.
+  Original admission/EPERM causes remain unproven; these are fixture repairs.
+
+- Managed SSH readiness and hook receipt deadline fixture repairs passed focused
+  checks and independent review with no findings. Combined aggregate then
+  stopped at `lifecycle.rs:804`, where a coalesced resize returned Busy
+  (**614/1/5**, source stable and preservation matched). A narrow fixture
+  correction is active, retaining real PTY geometry/input assertions.
+  No production request replay or timeout change is authorized by this failure.
+
+- `6230bd4` hosted retry has two distinct failures under investigation:
+  Foundation macOS Codex entered its untracked fallback after route admission
+  was not confirmed; universal macOS failed a per-hook exact event receipt
+  socket wait in `connection.rs:549` with WouldBlock. Both full logs are retained
+  under `/tmp/zmux-osc7501-final-6230bd4/`. Separate read-only diagnoses are
+  active. EPERM and startup retry messages are not attributed as causes.
+  App compilation/native sizing/Programs acceptance did not run.
+
+- Latest source pushed: `6230bd4fb6842d15901f1c02daab7fa91dfb9dea`.
+  Final local aggregate **763/0/7**, 263.27 seconds, source stable and unrelated
+  work preserved. [Foundation 43398620022](https://github.com/ashutoshpw/zmux/actions/runs/43398620022)
+  and [universal 43398619986](https://github.com/ashutoshpw/zmux/actions/runs/43398619986)
+  are queued. All 229 retained linked-engine Git pins match this commit.
+  Final native viewport/Programs acceptance and final artifact remain required.
+
 - Provider lifecycle fixture now reuses bounded Desktop reads throughout its
   existing three tests, including the original eight-second live deadline.
   Parent accepted the mechanical diff; final aggregate **763/0/7**, 263.27
