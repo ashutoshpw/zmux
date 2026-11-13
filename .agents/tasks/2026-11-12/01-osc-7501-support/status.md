@@ -6,37 +6,35 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `c34605102c19380315c3b262686d26f7d57c6c1b`.
-  The new provider snapshot and final-drain fixture source passed complete
-  local `scripts/check`: **763/0/7** in 282.56 seconds, with unchanged source
-  fingerprints and preserved unrelated work. These repairs are not pushed yet.
-- Hosted Foundation `43360964670` failed when a provider fixture unwrapped
-  the supported transient snapshot result `Busy`; eleven poisoned-lock
-  failures followed. A test-only repair now reuses the shared bounded reader,
-  preserves existing polling deadlines, and passes **15/0/2** locally.
-  Independent review accepted with no findings. This is not evidence of a production
-  OpenCode setup failure.
-- Universal macOS `43360964642` failed at the final-drain checkpoint fixture's
-  `snapshot.bytes_read > 0` assertion. The fixture closes its child PTY before
-  the held worker reads. The fixture now captures exact real PTY bytes into
-  the existing deferred buffer before allowing child exit, then admits its
-  checkpoint after observed exit. Focused and aggregate checks passed;
-  independent review accepted. Parent removed its non-blocking P3 private
-  dirty-result assertion; final aggregate recheck passed **763/0/7**. The possible Darwin unread-output behavior
-  remains a hypothesis.
-- Ghostty linkage `43360978497` is accepted at `c346051`: downloaded artifact
-  `14007902860`, 22,998,362 bytes, SHA-256
-  `616532a3d83541d36fa447498f590b42582e1ac4a1caabbcdaccbdb1ad509ea0`;
-  all 229 source pins match. ARM engine **4/4**, linked 7501 **1/1**,
-  Session **4/4**, linked real-PTY 7501 **1/1**, and both Apple compile/link
-  phases passed. Intel execution and native host linkage were not requested.
-- Both fixture reviews and final aggregate checks passed. Commit/push the
-  validated scoped fixtures and refresh hosted Foundation, universal
-  macOS and retained Ghostty linkage at the new source. Engine libraries
-  need no rebuild.
-- No accepted app download exists yet. Final packaging, hashes/source,
-  arm64/x86_64, minimum OS, signature, native Programs receipts and actual
-  packaged screenshot inspection remain required.
+- Latest pushed source: `82df3353d2bea3a9b2f6919ba67b48b2df5fb05a`.
+  Fixture reviews accepted and final local `scripts/check` passed **763/0/7**
+  in 282.56 seconds, source stable and unrelated work preserved.
+- [Foundation 43366740329](https://github.com/ashutoshpw/zmux/actions/runs/43366740329):
+  Linux passed **763/0/7**. macOS failed only
+  `managed_ssh_bootstrap_fits_a_single_exec_argument`: spawning `/bin/true`
+  returned ENOENT before the size assertion (**12/1/2** shell suite).
+  [Universal macOS 43366740304](https://github.com/ashutoshpw/zmux/actions/runs/43366740304)
+  failed at the same fixture. Both newer checkpoint/provider fixtures passed.
+  The exact reason for that executable's absence is not established.
+- The narrow test-only portable exec-target repair passed focused **1/1** and
+  shell integration **13/0/2**, formatting and strict scoped Clippy. Parent
+  accepted the small diff. Aggregate check then stopped on an independent
+  Session exit-wait fixture snapshot `Busy` unwrap (278/1/3, source unchanged
+  and unrelated work preserved). The bounded same-deadline read repair passed all three reconnect tests;
+  parent accepted the small fixture-only diff. Final combined aggregate passed
+  **763/0/7** in 267.16 seconds, source stable and unrelated work preserved.
+  The bootstrap fixture retains actual
+  single-argument exec, success and the 64 KiB budget assertion, using the
+  suite's existing `/bin/sh` dependency with an inert command and unused payload.
+- [Ghostty linkage 43366752162](https://github.com/ashutoshpw/zmux/actions/runs/43366752162)
+  passed. Artifact `14010980716`: 22,998,513 bytes, SHA-256
+  `55866ceb9cf1045b24bd52b665acda50f66d627028c040afea9b66791958e2e2`;
+  all 229 source pins match `82df335`. ARM engine **4/4**, linked 7501 **1/1**,
+  Session **4/4**, linked real-PTY 7501 **1/1**, both Apple compile/link phases
+  passed. Intel execution and native host execution were not requested.
+- No accepted app download exists yet. Final universal packaging, archive and
+  source verification, native Programs receipts and actual screenshot inspection
+  remain required. Candidate archives do not establish delivery.
 
 ## Earlier overall acceptance notes
 

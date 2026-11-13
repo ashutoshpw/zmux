@@ -1332,9 +1332,15 @@ fn install_ssh_surface(worker: &mut Worker) -> (Uuid, SurfaceId, SessionId) {
 }
 fn wait_for_session_exit(session: &Session) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while session.snapshot().unwrap().state != zmux_session_runtime::State::Exited {
+    loop {
         assert!(Instant::now() < deadline, "fixture terminal did not exit");
-        thread::sleep(Duration::from_millis(2));
+        match session.snapshot() {
+            Ok(snapshot) if snapshot.state == zmux_session_runtime::State::Exited => return,
+            Ok(_) | Err(zmux_session_runtime::SessionError::Busy) => {
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => panic!("read fixture terminal snapshot: {error}"),
+        }
     }
 }
 fn flush_shutdown(worker: &mut Worker) {

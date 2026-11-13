@@ -77,7 +77,10 @@ fn wait_for_file(path: &std::path::Path, context: &str) {
 fn managed_ssh_bootstrap_fits_a_single_exec_argument() {
     let command =
         shell_integration::remote_command(&shell_integration::OpenRequestNonce::generate());
-    let status = Command::new("/bin/true")
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(":")
+        .arg("zmux-bootstrap-argument")
         .arg(&command)
         .status()
         .expect("managed SSH command must fit the platform exec argument limit");

@@ -67,3 +67,10 @@ After removing the review P3 private dirty-result assertion, final aggregate
 passed **763/0/7** in 282.56 seconds, source fingerprints unchanged and unrelated
 work preserved. Prior complete 283.08-second receipt is archived as
 `check-round21`; current receipt/log remain `final-check.{json,log}`.
+
+Portable bootstrap exec and Session exit-snapshot fixture aggregate passed
+**763/0/7** in 267.16 seconds. All static/license/C ABI gates passed, source
+fingerprints remained unchanged and unrelated work matched the preservation
+ledger. The earlier Busy exit-read failure remains archived as `check-round23`;
+its underlying test contract is retained. This is local source validation,
+not post-fix macOS or packaged-app acceptance.

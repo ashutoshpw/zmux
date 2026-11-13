@@ -111,3 +111,6 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/provider-hook-snapshot-recheck.md](references/provider-hook-snapshot-recheck.md) — independent acceptance of bounded snapshot reads and unchanged fixture contracts.
 - [references/checkpoint-final-drain-fixture-repair.md](references/checkpoint-final-drain-fixture-repair.md) — actual PTY capture before child exit and unchanged pre-retirement checkpoint contract.
 - [references/checkpoint-final-drain-fixture-recheck.md](references/checkpoint-final-drain-fixture-recheck.md) — independent fixture ordering acceptance and removed private-result assertion.
+- [references/hosted-final-82df335.md](references/hosted-final-82df335.md) — Linux and retained linkage acceptance, macOS exec-fixture failure before app packaging.
+- [references/bootstrap-exec-fixture-repair.md](references/bootstrap-exec-fixture-repair.md) — portable inert-shell kernel exec check retaining the complete bootstrap and 64 KiB assertion.
+- [references/session-exit-snapshot-fixture-repair.md](references/session-exit-snapshot-fixture-repair.md) — original-deadline Busy handling in real Session reconnect exit observation.
