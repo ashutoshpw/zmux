@@ -104,3 +104,5 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/browser-link-snapshot-repair.md](references/browser-link-snapshot-repair.md) — local aggregate Busy unwrap failure and bounded fixture read repair without command replay.
 - [references/transfer-retirement-final-recheck.md](references/transfer-retirement-final-recheck.md) — independent acceptance of early generation-bound cancellation and terminal outcome precedence.
 - [references/native-lease-diagnostic.md](references/native-lease-diagnostic.md) — aggregate-only native lease assertion, retained response diagnostic and focused pass without cause claim.
+- [references/hosted-final-7a3a0a0.md](references/hosted-final-7a3a0a0.md) — Ubuntu acceptance and Darwin checkpoint socket path failures at exact source.
+- [references/checkpoint-socket-path-repair.md](references/checkpoint-socket-path-repair.md) — deterministic long-TMPDIR red/green using existing checkpoint tests and short private socket roots.

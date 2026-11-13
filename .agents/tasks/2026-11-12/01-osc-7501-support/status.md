@@ -6,32 +6,26 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `87cc88d776f7378856da86d131e98be0c22f9846`.
-  Full local `scripts/check` passed **759/0/7** in 286.36 seconds with stable
-  source fingerprints and preserved unrelated work. Hosted outcomes below are
-  authoritative for native acceptance; the local pass does not supersede them.
-- All fresh hosted runs failed: Foundation `43342408930`, universal macOS
-  `43342408962`, and Ghostty linkage `43342460208`. No universal app ZIP,
-  packaged Programs receipt or screenshot was produced. The source has no
-  accepted app download.
-- ARM Ghostty engine tests passed 4/4 and its Program Status test 1/1. Both
-  blocked Session fixtures compare generation 3 with a stale generation-2
-  baseline taken before input admission. Parent now captures the committed
-  baseline after input backpressure and before emitting the query, retaining
-  all committed-state assertions. Session acceptance and Intel compile are
-  still pending native execution.
-- Foundation macOS failed the delayed checkpoint latency assertion; the child
-  can release its one-second hold before the observation thread is scheduled.
-  Universal macOS failed the public Programs projection fixture; a prompt reset
-  after its short printf command is under investigation. One Luna worker owns
-  deterministic Desktop test barriers with original assertions/deadlines.
-- Foundation Linux first failed OpenCode plugin setup, with subsequent mutex
-  poison cascades. The CLI now reports sanitized setup stages and elapsed time;
-  the real-Desktop fixture waits for completed shell startup and covers a
-  controlled slow-help fallback. The historical setup stage remains
-  unproven. See [OpenCode hosted setup repair](references/opencode-hosted-setup-repair.md).
-- Next: accept the two repair slices, independent review plus stable fullcheck,
-  scoped commit/push, retry hosted checks and verify final downloadable app.
+- Latest pushed source: `7a3a0a06f8c330b20db916a8f0e45d5481bf98d8`.
+  Complete local `scripts/check` passed **763/0/7** in 262.13 seconds,
+  including strict Clippy, licenses, C bridge and native lease gates. Source
+  fingerprints remained unchanged and unrelated work was preserved.
+- All source slices and the latest transfer retirement correction have passed
+  their scoped independent reviews. Early cancellation binds exact session and
+  launch generation and preserves preexisting terminal upload outcomes. Small
+  fixture read/publication waits retain their original deadlines and assertions.
+- Ghostty linkage [43349584656](https://github.com/ashutoshpw/zmux/actions/runs/43349584656)
+  passed ARM engine 4/4, Program Status 1/1, Session 4/4, and linked real-PTY
+  Session 1/1. Both Apple targets compiled/linked. All 229 captured source
+  inputs still match the latest source; reviewed library bytes are unchanged.
+  Intel runtime, native-host/AppKit linkage and physical hardware are not claimed.
+- Fresh [Foundation 43358543419](https://github.com/ashutoshpw/zmux/actions/runs/43358543419)
+  and [universal macOS 43358543431](https://github.com/ashutoshpw/zmux/actions/runs/43358543431)
+  are queued/running at the latest source. Read-only final artifact verification
+  is active. Earlier failed runs are historical diagnostics, not acceptance.
+- No accepted app download exists yet. Completion requires the final universal
+  workflow, downloaded artifact hash/source/architecture/minimum-OS/signature
+  checks, native Programs receipts, and inspection of its packaged screenshot.
 
 ## Earlier overall acceptance notes
 
@@ -682,3 +676,29 @@ dispatch or app manipulation was performed.
   logging is retained and the complete gate now passes without retry logic.
 - Scoped commit/push and new Foundation/universal app executions follow.
   Ghostty's successful 229-input engine/Session closure remains unchanged.
+
+## Validated final retirement commit pushed
+
+- Source `7a3a0a06f8c330b20db916a8f0e45d5481bf98d8` is pushed to main.
+  Complete local check passed 763/0/7 in 262.13 seconds with all static, license
+  and foreign ABI gates green, source unchanged and unrelated files preserved.
+- Fresh Foundation `43358543419` and universal macOS `43358543431` are queued
+  at that exact source. Read-only artifact verification is active.
+- Successful Ghostty engine/Session linkage remains at `be8ec91`; all 229 of
+  its retained source inputs still match the final retirement commit. No linked
+  input or reviewed library bytes changed, so no redundant library rebuild
+  was dispatched. Native app acceptance and final download are still pending.
+
+## Short Unix-socket fixture portability repair
+
+- Foundation at `7a3a0a0` passed Ubuntu 763/0/7 plus 148 DOM cases. Both
+  macOS workflows stopped at the two Session checkpoint socket binds exceeding
+  SUN_LEN; no app package was built.
+- Parent reproduced both failures with a 105-byte TMPDIR, then changed only
+  the test fixture to canonical short `/tmp` UUID directories with mode 0700.
+  Both existing checkpoint tests pass under the same long-root condition.
+- Full local check is running before the fixture commit/push. Captured Session
+  source changed only under cfg(test), so fresh retained-library linkage will
+  rerun alongside the next native build without rebuilding engine libraries.
+
+- The complete short-socket fixture aggregate passed **763/0/7** in 285.75 seconds, with stable source fingerprints and matching unrelated preservation hashes. It is ready for the scoped fixture commit and exact-source native retries.

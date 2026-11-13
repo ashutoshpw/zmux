@@ -54,3 +54,5 @@ Combined Darwin progress/fixture repair full check: **759/0/7** in 286.36 second
 Final fixture/diagnostic and cleanup-proof full check passed **759/0/7** in 264.34 seconds, source stable and preservation matched. Previous 270.30-second receipt is archived as `check-round14`. Native workflows remain separate acceptance gates.
 
 Final retirement-owner and fixture aggregate passed **763/0/7** in 262.13 seconds, including full C ABI/native lease checks, source unchanged and unrelated preservation matched. Prior failed aggregate is archived as `check-round18`; no root cause is inferred for its isolated lease assertion.
+
+Short Unix-socket checkpoint fixture aggregate: **763/0/7** in 285.75 seconds, all static/license/C ABI gates passed, source unchanged and preservation matched. The preceding complete 262.13-second receipt is archived as `check-round19`.

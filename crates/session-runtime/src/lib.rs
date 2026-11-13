@@ -2374,7 +2374,13 @@ fn pty_size(size: Size) -> PtySize {
 #[cfg(test)]
 mod checkpoint_tests {
     use super::*;
-    use std::{fs, io::Read, os::fd::AsRawFd, os::unix::net::UnixListener, path::PathBuf};
+    use std::{
+        fs,
+        io::Read,
+        os::fd::AsRawFd,
+        os::unix::{fs::DirBuilderExt, net::UnixListener},
+        path::PathBuf,
+    };
 
     struct TestDirectory(PathBuf);
 
@@ -2396,9 +2402,16 @@ mod checkpoint_tests {
 
     fn checkpoint_with_preexisting_output(child_exits: bool) {
         let directory = TestDirectory(
-            std::env::temp_dir().join(format!("zmux-checkpoint-order-{}", uuid::Uuid::new_v4())),
+            // Darwin's per-user TMPDIR can exceed sockaddr_un's path limit.
+            PathBuf::from("/tmp")
+                .canonicalize()
+                .expect("resolve short fixture root")
+                .join(format!("zmux-checkpoint-order-{}", uuid::Uuid::new_v4())),
         );
-        fs::create_dir(&directory.0).expect("create checkpoint fixture directory");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory.0)
+            .expect("create checkpoint fixture directory");
         let socket_path = directory.0.join("child-ready.sock");
         let listener = UnixListener::bind(&socket_path).expect("bind child readiness socket");
         let script_path = directory.0.join("child.py");
