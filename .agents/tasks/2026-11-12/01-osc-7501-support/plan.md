@@ -131,3 +131,9 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/managed-ssh-codex-readiness-repair.md](references/managed-ssh-codex-readiness-repair.md) — real lifecycle readiness before tracked fixture launch and independent process/tracking markers.
 - [references/managed-ssh-fixture-repairs-recheck.md](references/managed-ssh-fixture-repairs-recheck.md) — independent acceptance of lifecycle readiness and receipt deadline fixture repairs.
 - [references/session-resize-contention-fixture-repair.md](references/session-resize-contention-fixture-repair.md) — same-size coalesced Busy retry retains actual PTY geometry and exact input checks.
+- [references/hosted-final-2efb76d.md](references/hosted-final-2efb76d.md) — Foundation and fresh linkage accepted; universal SSH setup garbling and pre-hello exits stopped app build.
+- [references/managed-ssh-setup-transport-repair.md](references/managed-ssh-setup-transport-repair.md) — prepared private setup files and short real-PTY commands replace garbled multiline injection.
+- [references/managed-ssh-prehello-exit-diagnosis.md](references/managed-ssh-prehello-exit-diagnosis.md) — discarded stderr/exit status prevent causal attribution; bounded non-reaping owner diagnostics proposed.
+- [references/managed-ssh-setup-transport-recheck.md](references/managed-ssh-setup-transport-recheck.md) — scoped review and repaired fail-closed source/launch chain.
+- [references/managed-ssh-prehello-exit-evidence.md](references/managed-ssh-prehello-exit-evidence.md) — bounded stderr classes and non-reaping exit observations for pre-Hello EOF only.
+- [references/managed-ssh-prehello-exit-evidence-recheck.md](references/managed-ssh-prehello-exit-evidence-recheck.md) — production diagnostic review, macOS closed-descriptor P2 fixed by excluding it from the poll prefix.

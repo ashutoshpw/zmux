@@ -4,10 +4,10 @@ mod desktop_snapshot;
 use desktop_runtime::agent_lifecycle::{Activity, AlertKind, Connection, Provider};
 use serde_json::Value;
 use std::{
-    fs,
-    io::Read,
+    fs::{self, OpenOptions},
+    io::{Read, Write},
     net::{TcpListener, TcpStream},
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::Arc,
@@ -182,18 +182,10 @@ fn has_exact_line(contents: &str, expected: &str) -> bool {
     contents.lines().any(|line| line == expected)
 }
 
-const MANAGED_CODEX_READY_MARKER: &str =
-    concat!("ZMUX_", "MANAGED_", "SSH_", "CODEX_", "LIFECYCLE_", "READY");
-const MANAGED_CODEX_READY_FAILED_MARKER: &str = concat!(
-    "ZMUX_",
-    "MANAGED_",
-    "SSH_",
-    "CODEX_",
-    "LIFECYCLE_",
-    "FAILED"
-);
-const CODEX_READINESS_PROBE: &str = r#"python3 - <<'PY'
-import os
+const MANAGED_SSH_READY_MARKER: &str = concat!("ZMUX_", "MANAGED_", "SSH_", "LIFECYCLE_", "READY");
+const MANAGED_SSH_READY_FAILED_MARKER: &str =
+    concat!("ZMUX_", "MANAGED_", "SSH_", "LIFECYCLE_", "FAILED");
+const MANAGED_SSH_READINESS_PROBE: &str = r#"import os
 import stat
 import time
 import uuid
@@ -248,12 +240,112 @@ def generation_is_ready():
             return False
 
 if generation_is_ready():
-    print("ZMUX_" + "MANAGED_" + "SSH_" + "CODEX_" + "LIFECYCLE_" + "READY", flush=True)
+    print("ZMUX_" + "MANAGED_" + "SSH_" + "LIFECYCLE_" + "READY", flush=True)
     raise SystemExit(0)
-print("ZMUX_" + "MANAGED_" + "SSH_" + "CODEX_" + "LIFECYCLE_" + "FAILED", flush=True)
+print("ZMUX_" + "MANAGED_" + "SSH_" + "LIFECYCLE_" + "FAILED", flush=True)
 raise SystemExit(75)
-PY
 "#;
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_single_quote(path.to_str().expect("fixture paths are valid UTF-8"))
+}
+
+fn write_private_fixture_file(root: &Path, name: &str, contents: &[u8]) -> PathBuf {
+    let root_metadata = fs::symlink_metadata(root).expect("fixture root metadata");
+    assert!(root_metadata.file_type().is_dir());
+    assert_eq!(
+        fs::metadata(root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+
+    let path = root.join(name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap_or_else(|error| panic!("create private fixture file {}: {error}", path.display()));
+    file.write_all(contents)
+        .unwrap_or_else(|error| panic!("write private fixture file {}: {error}", path.display()));
+    file.sync_all()
+        .unwrap_or_else(|error| panic!("sync private fixture file {}: {error}", path.display()));
+    drop(file);
+
+    let metadata = fs::symlink_metadata(&path).expect("private fixture file metadata");
+    assert!(
+        metadata.file_type().is_file(),
+        "fixture file must not be a symlink"
+    );
+    assert_eq!(metadata.uid(), root_metadata.uid(), "fixture file owner");
+    assert_eq!(metadata.nlink(), 1, "fixture file link count");
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        contents,
+        "fixture bytes are complete"
+    );
+    path
+}
+
+fn assert_python_fixture_parses(path: &Path) {
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            "import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_bytes())",
+        ])
+        .arg(path)
+        .output()
+        .expect("run Python AST check for prepared managed SSH probe");
+    assert!(
+        output.status.success(),
+        "prepared managed SSH probe is invalid Python: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_shell_fixture_parses(path: &Path) {
+    let output = Command::new("/bin/sh")
+        .arg("-n")
+        .arg(path)
+        .output()
+        .expect("run shell syntax check for prepared managed SSH setup");
+    assert!(
+        output.status.success(),
+        "prepared managed SSH setup is invalid shell: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn wait_for_managed_ssh_readiness(socket: &Path, surface: &str, fixture_root: &Path) {
+    let probe_path = write_private_fixture_file(
+        fixture_root,
+        "managed-ssh-readiness.py",
+        MANAGED_SSH_READINESS_PROBE.as_bytes(),
+    );
+    assert_python_fixture_parses(&probe_path);
+    let command = format!("python3 {}\n", shell_quote_path(&probe_path));
+    assert!(command.len() < 128, "readiness PTY command must stay short");
+    assert!(
+        !command.contains(MANAGED_SSH_READY_MARKER),
+        "echoing the readiness command cannot satisfy the exact marker"
+    );
+    json(socket, &["send-text", "--surface", surface, &command]);
+    let readiness = screen(socket, surface, |snapshot| {
+        snapshot["contents"].as_str().is_some_and(|contents| {
+            has_exact_line(contents, MANAGED_SSH_READY_MARKER)
+                || has_exact_line(contents, MANAGED_SSH_READY_FAILED_MARKER)
+        })
+    });
+    let readiness_contents = readiness["contents"].as_str().unwrap_or_default();
+    assert!(
+        has_exact_line(readiness_contents, MANAGED_SSH_READY_MARKER),
+        "managed SSH lifecycle readiness failed before the fixture daemon or provider launch; terminal={readiness_contents}"
+    );
+}
 
 fn upload(socket: &Path, id: u64, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -402,38 +494,31 @@ fn managed_ssh_codex_uses_root_thread_events_and_ignores_stop_hook_decisions() {
         !calls.exists() && !app_server_pid.exists(),
         "Codex fixture ran before the managed lifecycle readiness probe"
     );
-    json(
-        &socket,
-        &["send-text", "--surface", surface, CODEX_READINESS_PROBE],
-    );
-    let readiness = screen(&socket, surface, |snapshot| {
-        snapshot["contents"].as_str().is_some_and(|contents| {
-            has_exact_line(contents, MANAGED_CODEX_READY_MARKER)
-                || has_exact_line(contents, MANAGED_CODEX_READY_FAILED_MARKER)
-        })
-    });
-    let readiness_contents = readiness["contents"].as_str().unwrap_or_default();
-    assert!(
-        has_exact_line(readiness_contents, MANAGED_CODEX_READY_MARKER),
-        "managed SSH Codex lifecycle readiness failed before the fixture daemon or provider launch; provider calls exist={}; terminal={readiness_contents}",
-        calls.exists()
-    );
+    wait_for_managed_ssh_readiness(&socket, surface, &fixture.root);
     assert!(
         !calls.exists() && !app_server_pid.exists(),
         "Codex fixture ran before the managed lifecycle readiness barrier"
     );
-    let command = format!(
-        "export PATH='{}':$PATH; export ZMUX_FAKE_CODEX_STATE='{}'; export ZMUX_FAKE_CODEX_REPORT='{}'; export ZMUX_FAKE_CODEX_CALLS='{}'; export ZMUX_FAKE_CODEX_STOP_PROBE='{}'; export ZMUX_FAKE_CODEX_STOP_RESULT='{}'; export ZMUX_FAKE_CODEX_RELEASE='{}'; export ZMUX_FAKE_CODEX_SOCKET='{}'; export ZMUX_FAKE_CODEX_DAEMON_PID='{}'; command codex fixture-daemon-start && codex\n",
-        bin.display(),
-        state.display(),
-        report.display(),
-        calls.display(),
-        stop_probe.display(),
-        stop_result.display(),
-        release.display(),
-        app_server_socket.display(),
-        app_server_pid.display(),
+    let setup = format!(
+        "export PATH={}:\"$PATH\"\nexport ZMUX_FAKE_CODEX_STATE={}\nexport ZMUX_FAKE_CODEX_REPORT={}\nexport ZMUX_FAKE_CODEX_CALLS={}\nexport ZMUX_FAKE_CODEX_STOP_PROBE={}\nexport ZMUX_FAKE_CODEX_STOP_RESULT={}\nexport ZMUX_FAKE_CODEX_RELEASE={}\nexport ZMUX_FAKE_CODEX_SOCKET={}\nexport ZMUX_FAKE_CODEX_DAEMON_PID={}\n",
+        shell_quote_path(&bin),
+        shell_quote_path(&state),
+        shell_quote_path(&report),
+        shell_quote_path(&calls),
+        shell_quote_path(&stop_probe),
+        shell_quote_path(&stop_result),
+        shell_quote_path(&release),
+        shell_quote_path(&app_server_socket),
+        shell_quote_path(&app_server_pid),
     );
+    let setup_path =
+        write_private_fixture_file(&fixture.root, "codex-provider-setup.sh", setup.as_bytes());
+    assert_shell_fixture_parses(&setup_path);
+    let command = format!(
+        ". {} && command codex fixture-daemon-start && codex\n",
+        shell_quote_path(&setup_path)
+    );
+    assert!(command.len() < 128, "Codex PTY command must stay short");
     json(&socket, &["send-text", "--surface", surface, &command]);
     let startup = screen(&socket, surface, |snapshot| {
         snapshot["contents"].as_str().is_some_and(|contents| {
@@ -612,21 +697,41 @@ fn managed_ssh_opencode_tracks_root_events_refreshes_long_turns_and_preserves_co
         .as_str()
         .unwrap();
     screen(&socket, surface, |snapshot| snapshot["state"] == "running");
-
-    let command = format!(
-        "export PATH='{}':$PATH; export OPENCODE_CONFIG_DIR='{}'; export FIXTURE_OPENCODE_RUNNER='{}'; export FIXTURE_OPENCODE_PLUGIN_HOST='{}'; export FIXTURE_OPENCODE_ROOT_SESSION='{}'; export FIXTURE_OPENCODE_REPORT='{}'; export FIXTURE_OPENCODE_CALLS='{}'; export FIXTURE_OPENCODE_USER_CONFIG='{}'; export FIXTURE_OPENCODE_USER_CONFIG_CONTENT='{}'; export FIXTURE_OPENCODE_USER_PLUGIN_CONTENT='{}'; export FIXTURE_OPENCODE_STANDALONE_SUPPORT=1; opencode --session {}\n",
-        bin.display(),
-        config.display(),
-        runner.display(),
-        host.display(),
-        root_session,
-        report.display(),
-        calls.display(),
-        config.display(),
-        config_contents,
-        user_plugin_contents,
-        root_session,
+    assert!(
+        !calls.exists() && !report.exists(),
+        "OpenCode fixture ran before the managed lifecycle readiness probe"
     );
+    wait_for_managed_ssh_readiness(&socket, surface, &fixture.root);
+    assert!(
+        !calls.exists() && !report.exists(),
+        "OpenCode fixture ran before the managed lifecycle readiness barrier"
+    );
+
+    let setup = format!(
+        "export PATH={}:\"$PATH\"\nexport OPENCODE_CONFIG_DIR={}\nexport FIXTURE_OPENCODE_RUNNER={}\nexport FIXTURE_OPENCODE_PLUGIN_HOST={}\nexport FIXTURE_OPENCODE_ROOT_SESSION={}\nexport FIXTURE_OPENCODE_REPORT={}\nexport FIXTURE_OPENCODE_CALLS={}\nexport FIXTURE_OPENCODE_USER_CONFIG={}\nexport FIXTURE_OPENCODE_USER_CONFIG_CONTENT={}\nexport FIXTURE_OPENCODE_USER_PLUGIN_CONTENT={}\nexport FIXTURE_OPENCODE_STANDALONE_SUPPORT=1\n",
+        shell_quote_path(&bin),
+        shell_quote_path(&config),
+        shell_quote_path(&runner),
+        shell_quote_path(&host),
+        shell_single_quote(root_session),
+        shell_quote_path(&report),
+        shell_quote_path(&calls),
+        shell_quote_path(&config),
+        shell_single_quote(config_contents),
+        shell_single_quote(user_plugin_contents),
+    );
+    let setup_path = write_private_fixture_file(
+        &fixture.root,
+        "opencode-provider-setup.sh",
+        setup.as_bytes(),
+    );
+    assert_shell_fixture_parses(&setup_path);
+    let command = format!(
+        ". {} && opencode --session {}\n",
+        shell_quote_path(&setup_path),
+        shell_single_quote(root_session)
+    );
+    assert!(command.len() < 128, "OpenCode PTY command must stay short");
     json(&socket, &["send-text", "--surface", surface, &command]);
     screen(&socket, surface, |snapshot| {
         snapshot["contents"]

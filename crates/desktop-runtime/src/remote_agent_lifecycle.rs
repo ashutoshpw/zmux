@@ -31,7 +31,10 @@ use zmux_remote_runtime::{
     },
     connection::ManagedConnection,
 };
-use zmux_session_runtime::shell_integration::OpenRequestNonce;
+use zmux_session_runtime::{
+    child::{ExitObservation, observe_child},
+    shell_integration::OpenRequestNonce,
+};
 
 const MAX_PARTIAL_FRAME_BYTES: usize = MAX_AGENT_LIFECYCLE_FRAME_BYTES;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -40,6 +43,9 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 const CLIENT_FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHILD_REAP_SYNC_TIMEOUT: Duration = Duration::from_millis(250);
 const CHILD_REAP_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MAX_PRE_HELLO_STDERR_BYTES: usize = 4_096;
+const PIPE_READS_PER_POLL: usize = 4;
+const PIPE_READ_BUFFER_BYTES: usize = 4_096;
 const MAX_RECONNECT_ATTEMPTS: usize = 5;
 const MAX_RECONNECT_GENERATIONS: usize = 8;
 const MAX_PENDING_RECEIPTS: usize = MAX_PENDING_HOOK_RECEIPTS;
@@ -339,6 +345,19 @@ impl ChildOwner {
         self.child.as_mut().expect("owned managed SSH child")
     }
 
+    /// Observe only this retained child without consuming its wait status. The
+    /// physical Child remains owned so Drop can keep the process-group ID live
+    /// until its existing cancellation and reap path runs.
+    fn observe_non_reaping_exit(&self) -> io::Result<Option<ExitObservation>> {
+        if self.reaped {
+            return Ok(None);
+        }
+        let Some(child) = &self.child else {
+            return Ok(None);
+        };
+        observe_child(child.id(), false)
+    }
+
     #[cfg(test)]
     fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
         let status = self.child_mut().try_wait()?;
@@ -363,6 +382,123 @@ impl ChildOwner {
         }
         true
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StderrClass {
+    SshOptionOrConfigurationFailure,
+    SshConnectionOrMasterFailure,
+    SshAuthenticationOrHostKeyFailure,
+    RemoteInterpreterOrHelperMissing,
+    Unclassified,
+}
+
+impl StderrClass {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SshOptionOrConfigurationFailure => "ssh_option_or_configuration_failure",
+            Self::SshConnectionOrMasterFailure => "ssh_connection_or_master_failure",
+            Self::SshAuthenticationOrHostKeyFailure => "ssh_authentication_or_host_key_failure",
+            Self::RemoteInterpreterOrHelperMissing => "remote_interpreter_or_helper_missing",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
+fn classify_stderr(bytes: &[u8]) -> StderrClass {
+    let has_any = |patterns: &[&[u8]]| {
+        patterns.iter().any(|pattern| {
+            bytes
+                .windows(pattern.len())
+                .any(|window| window.eq_ignore_ascii_case(pattern))
+        })
+    };
+
+    if has_any(&[
+        b"bad configuration option",
+        b"unknown option --",
+        b"illegal option --",
+        b"command-line: option requires an argument",
+    ]) {
+        StderrClass::SshOptionOrConfigurationFailure
+    } else if has_any(&[
+        b"permission denied (publickey",
+        b"permission denied (password",
+        b"permission denied (keyboard-interactive",
+        b"host key verification failed",
+        b"remote host identification has changed",
+        b"no matching host key type found",
+        b"no ed25519 host key is known",
+        b"no ecdsa host key is known",
+        b"no rsa host key is known",
+    ]) {
+        StderrClass::SshAuthenticationOrHostKeyFailure
+    } else if has_any(&[
+        b"python3: command not found",
+        b"python3: not found",
+        b"python3: no such file or directory",
+        b"claude-lifecycle-stream.py: not found",
+        b"claude-lifecycle-stream.py: no such file or directory",
+    ]) || (has_any(&[b"python3: can't open file"])
+        && has_any(&[b"no such file or directory"]))
+    {
+        StderrClass::RemoteInterpreterOrHelperMissing
+    } else if has_any(&[
+        b"could not resolve hostname",
+        b"connection refused",
+        b"connection timed out",
+        b"connection reset by peer",
+        b"connection closed by",
+        b"no route to host",
+        b"control socket connect",
+        b"master refused session request",
+        b"mux_client_request_session",
+    ]) {
+        StderrClass::SshConnectionOrMasterFailure
+    } else {
+        StderrClass::Unclassified
+    }
+}
+
+fn drain_stderr(
+    stderr: &mut FileDescriptor,
+    retained: &mut Vec<u8>,
+    retain: bool,
+) -> io::Result<bool> {
+    for _ in 0..PIPE_READS_PER_POLL {
+        let mut bytes = [0; PIPE_READ_BUFFER_BYTES];
+        match stderr.read(&mut bytes) {
+            Ok(0) => return Ok(true),
+            Ok(length) => {
+                if retain {
+                    let remaining = MAX_PRE_HELLO_STDERR_BYTES.saturating_sub(retained.len());
+                    retained.extend_from_slice(&bytes[..length.min(remaining)]);
+                }
+            }
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::Interrupted =>
+            {
+                break;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+fn pre_hello_eof_diagnostic(status: Option<ExitObservation>, stderr: &[u8]) -> String {
+    let status = match status {
+        Some(ExitObservation::Exited(code)) => format!("exit_code:{code}"),
+        Some(ExitObservation::Signaled(signal)) => format!("signal:{signal}"),
+        Some(ExitObservation::Stopped(_) | ExitObservation::Continued) | None => {
+            "unknown".to_owned()
+        }
+    };
+    format!(
+        "managed SSH lifecycle stdout closed before Hello (child_status={status}, stderr_class={})",
+        classify_stderr(stderr).label()
+    )
 }
 
 impl Drop for ChildOwner {
@@ -574,7 +710,7 @@ fn run_attempt(
         .args(spec.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .process_group(0);
     let mut child = ChildOwner::spawn(&mut command, Arc::clone(state.reap_deferred))
         .map_err(|error| format!("start managed SSH stream: {error}"))?;
@@ -600,6 +736,17 @@ fn run_attempt(
         .set_non_blocking(true)
         .map_err(|error| format!("configure managed SSH stream output: {error}"))?;
     drop(stdout);
+    let stderr = child
+        .child_mut()
+        .stderr
+        .take()
+        .ok_or_else(|| "managed SSH stream has no stderr pipe".to_owned())?;
+    let mut error_output = FileDescriptor::dup(&stderr)
+        .map_err(|error| format!("open managed SSH stream stderr: {error}"))?;
+    error_output
+        .set_non_blocking(true)
+        .map_err(|error| format!("configure managed SSH stream stderr: {error}"))?;
+    drop(stderr);
 
     let started_at = Instant::now();
     let handshake_deadline =
@@ -612,6 +759,9 @@ fn run_attempt(
     let mut activation_sent = false;
     let mut last_sequence = 0;
     let mut output_eof = false;
+    let mut stderr_eof = false;
+    let mut stderr_capture = Vec::with_capacity(MAX_PRE_HELLO_STDERR_BYTES);
+    let mut stdout_first_when_both_ready = true;
     loop {
         if cancellation.load(Ordering::Acquire) {
             return Ok(());
@@ -638,12 +788,35 @@ fn run_attempt(
                 revents: 0,
             },
             pollfd {
+                fd: error_output.as_raw_file_descriptor(),
+                events: POLLIN,
+                revents: 0,
+            },
+            pollfd {
                 fd: input.as_raw_file_descriptor(),
-                events: if pending_write.is_some() { POLLOUT } else { 0 },
+                events: 0,
                 revents: 0,
             },
         ];
-        let descriptor_count = if pending_write.is_some() { 2 } else { 1 };
+        let mut descriptor_count = 1;
+        let stderr_index = if !stderr_eof {
+            descriptor_count += 1;
+            Some(1)
+        } else {
+            None
+        };
+        let input_index = if pending_write.is_some() {
+            let index = descriptor_count;
+            descriptors[index] = pollfd {
+                fd: input.as_raw_file_descriptor(),
+                events: POLLOUT,
+                revents: 0,
+            };
+            descriptor_count += 1;
+            Some(index)
+        } else {
+            None
+        };
         let poll_timeout = pending_write
             .as_ref()
             .map(|pending: &PendingClientWrite| {
@@ -655,14 +828,24 @@ fn run_attempt(
         {
             return Err(format!("poll managed SSH lifecycle pipes: {error}"));
         }
-        if descriptor_count == 2 && descriptors[1].revents != 0 {
+        if input_index.is_some_and(|index| descriptors[index].revents != 0) {
             write_pending_client_frame(&mut input, &mut pending_write, &mut activation_sent)?;
         }
-        if descriptors[0].revents == 0 {
+        let output_ready = descriptors[0].revents != 0;
+        let stderr_ready = stderr_index.is_some_and(|index| descriptors[index].revents != 0);
+        let service_stderr_first = stderr_ready && (!output_ready || !stdout_first_when_both_ready);
+        if output_ready && stderr_ready {
+            stdout_first_when_both_ready = !stdout_first_when_both_ready;
+        }
+        if service_stderr_first {
+            stderr_eof |= drain_stderr(&mut error_output, &mut stderr_capture, !hello_seen)
+                .map_err(|error| format!("read managed SSH lifecycle stderr: {error}"))?;
+        }
+        if !output_ready && !stderr_ready {
             continue;
         }
-        for _ in 0..4 {
-            let mut bytes = [0; 4_096];
+        for _ in 0..PIPE_READS_PER_POLL {
+            let mut bytes = [0; PIPE_READ_BUFFER_BYTES];
             match output.read(&mut bytes) {
                 Ok(0) => {
                     output_eof = true;
@@ -700,6 +883,7 @@ fn run_attempt(
                         match &frame {
                             Frame::Hello { .. } if !hello_seen && last_sequence == 0 => {
                                 hello_seen = true;
+                                stderr_capture.clear();
                                 if *state.connected {
                                     *state.reconnect_previous_generation =
                                         Some(state.binding.generation);
@@ -791,10 +975,26 @@ fn run_attempt(
                 {
                     break;
                 }
-                Err(error) => return Err(format!("read managed SSH lifecycle output: {error}")),
+                Err(error) => {
+                    return Err(format!("read managed SSH lifecycle output: {error}"));
+                }
             }
         }
+        if stderr_ready && !service_stderr_first {
+            stderr_eof |= drain_stderr(&mut error_output, &mut stderr_capture, !hello_seen)
+                .map_err(|error| format!("read managed SSH lifecycle stderr: {error}"))?;
+        }
         if output_eof {
+            if cancellation.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if !hello_seen {
+                if Instant::now() >= handshake_deadline {
+                    return Err("managed SSH lifecycle heartbeat expired".into());
+                }
+                let status = child.observe_non_reaping_exit().ok().flatten();
+                return Err(pre_hello_eof_diagnostic(status, &stderr_capture));
+            }
             return Err(format!(
                 "managed SSH lifecycle stream closed (hello={hello_seen}, active={active_seen})"
             ));
@@ -1149,6 +1349,35 @@ else:
     const INSTALLED_LIFECYCLE_SCRIPT: &str =
         include_str!("../../session-runtime/src/shell/claude-lifecycle-stream.py");
 
+    const HELLO_THEN_CLOSE_PEER: &str = r#"
+import json
+import sys
+import time
+import uuid
+
+nonce = str(uuid.UUID(sys.argv[1]))
+
+def send(frame):
+    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+sys.stderr.write("PRE_HELLO_CAPTURE_CANARY Permission denied (publickey).\n")
+sys.stderr.flush()
+time.sleep(0.5)
+send({"kind": "hello", "version": 4, "nonce": nonce})
+activation = json.loads(sys.stdin.readline())
+if activation.get("kind") != "activate" or activation.get("version") != 4 or activation.get("nonce") != nonce:
+    sys.exit(71)
+send({
+    "kind": "active",
+    "version": 4,
+    "nonce": nonce,
+    "generation": activation["generation"],
+})
+sys.stderr.write("POST_HELLO_CANARY Permission denied (fixture only).\n")
+sys.stderr.flush()
+"#;
+
     struct SshFixture {
         local_root: PathBuf,
         remote_root: PathBuf,
@@ -1227,7 +1456,7 @@ else:
         fn install_bootstrap_gate(&self) {
             let root = shell_quote(self.remote_root.to_str().expect("fixture path is UTF-8"));
             let shell = format!(
-                "#!/bin/sh\ncase \"$SSH_ORIGINAL_COMMAND\" in\n  *ZMUX_REMOTE_LIFECYCLE=1*)\n    : > {root}/.bootstrap-started\n    while [ ! -e {root}/.release-bootstrap ]; do /bin/sleep 0.01; done\n    ;;\n  *claude-lifecycle-stream.py*)\n    printf 'attempt\\n' >> {root}/.stream-attempts\n    ;;\nesac\nif [ -n \"$SSH_ORIGINAL_COMMAND\" ]; then exec /bin/sh -c \"$SSH_ORIGINAL_COMMAND\"; else exec /bin/sh -i; fi\n"
+                "#!/bin/sh\ncase \"$SSH_ORIGINAL_COMMAND\" in\n  *ZMUX_REMOTE_LIFECYCLE=1*)\n    : > {root}/.bootstrap-started\n    while [ ! -e {root}/.release-bootstrap ]; do /bin/sleep 0.01; done\n    ;;\n  *claude-lifecycle-stream.py*)\n    printf 'attempt\\n' >> {root}/.stream-attempts\n    if [ -e {root}/.prehello-diagnostic-failure ]; then\n      printf 'ZMUX_PREHELLO_CANARY_SECRET Permission denied (publickey).\\n' >&2\n      i=0\n      while [ \"$i\" -lt 128 ]; do\n        printf '%8192s' '' >&2\n        i=$((i + 1))\n      done\n      exit 37\n    fi\n    ;;\nesac\nif [ -n \"$SSH_ORIGINAL_COMMAND\" ]; then exec /bin/sh -c \"$SSH_ORIGINAL_COMMAND\"; else exec /bin/sh -i; fi\n"
             );
             fs::write(self.remote_root.join("shell"), shell)
                 .expect("install deterministic remote bootstrap gate");
@@ -1296,6 +1525,128 @@ else:
             && ["/usr/sbin/sshd", "/usr/bin/ssh-keygen", "/usr/bin/ssh"]
                 .iter()
                 .all(|path| Path::new(path).is_file())
+    }
+
+    fn start_fixture_session(
+        fixture: &SshFixture,
+        connection: &Arc<ManagedConnection>,
+        nonce: OpenRequestNonce,
+    ) -> Session {
+        let registration = OpenRequestRegistration::new(nonce, OpenRequestSource::ManagedSsh);
+        let terminal = connection.terminal_spec(&nonce);
+        let session = Session::spawn_with_open_requests(
+            Launch {
+                program: terminal.program,
+                args: terminal.args,
+                cwd: None,
+                size: zmux_session_runtime::default_size(),
+            },
+            &[],
+            &[],
+            ShutdownPolicy::Kill,
+            None,
+            Some(registration),
+            Arc::clone(connection),
+        )
+        .expect("spawn managed SSH fixture terminal");
+
+        let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
+        while !bootstrap_started.exists() {
+            let snapshot = session_snapshot_before(
+                &session,
+                bootstrap_deadline,
+                "inspect diagnostic fixture SSH bootstrap",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH fixture bootstrap failed: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < bootstrap_deadline,
+                "managed SSH fixture did not enter its bootstrap gate"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(fixture.remote_root.join(".release-bootstrap"), b"go")
+            .expect("release diagnostic fixture SSH bootstrap");
+
+        let lifecycle_script =
+            PathBuf::from(nonce.remote_integration_directory()).join("claude-lifecycle-stream.py");
+        let expected_script = format!("{INSTALLED_LIFECYCLE_SCRIPT}\n");
+        let install_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if fs::read_to_string(&lifecycle_script).ok().as_deref()
+                == Some(expected_script.as_str())
+            {
+                break;
+            }
+            let snapshot = session_snapshot_before(
+                &session,
+                install_deadline,
+                "inspect diagnostic fixture lifecycle helper install",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH fixture bootstrap failed before helper install: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < install_deadline,
+                "managed SSH fixture did not install its lifecycle helper"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        session
+    }
+
+    fn run_fixture_attempt(
+        connection: Arc<ManagedConnection>,
+        nonce: OpenRequestNonce,
+        deadline: Instant,
+    ) -> (Result<(), String>, std::sync::mpsc::Receiver<Message>) {
+        let mut binding = Binding {
+            target: Target {
+                identity_namespace: Uuid::new_v4(),
+                surface_id: SurfaceId(901),
+                surface_uuid: Uuid::new_v4(),
+                session_id: SessionId(902),
+            },
+            launch_id: 1,
+            runtime_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            nonce: Uuid::parse_str(&nonce.remote_lifecycle_token())
+                .expect("fixture nonce is a UUID"),
+        };
+        let shared_binding = Mutex::new(binding);
+        let mut connected = false;
+        let mut handshake_generation = None;
+        let mut reconnect_previous_generation = None;
+        let reap_deferred = Arc::new(AtomicBool::new(false));
+        let mut state = AttemptState {
+            binding: &mut binding,
+            shared_binding: &shared_binding,
+            connected: &mut connected,
+            handshake_generation: &mut handshake_generation,
+            reconnect_previous_generation: &mut reconnect_previous_generation,
+            reap_deferred: &reap_deferred,
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let (_receipt_sender, receipt_receiver) = sync_channel(MAX_PENDING_RECEIPTS);
+        let cancellation = AtomicBool::new(false);
+        let result = run_attempt(
+            connection,
+            nonce,
+            &mut state,
+            sender,
+            &receipt_receiver,
+            &cancellation,
+            Some(deadline),
+        );
+        (result, receiver)
     }
 
     fn push_remote_hook(
@@ -1718,6 +2069,79 @@ else:
         assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
         assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 2);
         thread.join().unwrap();
+    }
+
+    #[test]
+    fn child_owner_observes_exit_and_signal_without_reaping_its_retained_child() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 23"]).process_group(0);
+        let mut owner = ChildOwner::spawn(&mut command, Arc::new(AtomicBool::new(false)))
+            .expect("start owned child for non-reaping exit observation");
+        let pid = owner.child_mut().id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let observation = loop {
+            if let Some(observation) = owner
+                .observe_non_reaping_exit()
+                .expect("observe only the retained child without reaping")
+            {
+                break observation;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "owned child did not publish its exit status"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+
+        assert_eq!(observation, ExitObservation::Exited(23));
+        assert!(
+            !owner.reaped,
+            "WNOWAIT observation must leave the child unreaped"
+        );
+        assert_eq!(
+            owner.child_mut().id(),
+            pid,
+            "the physical Child remains retained"
+        );
+        assert!(
+            owner.terminate_group(),
+            "Drop must retain permission to perform the existing group cleanup"
+        );
+        assert!(
+            !owner.reaped,
+            "group cleanup must not consume the wait status"
+        );
+        drop(owner);
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "kill -TERM $$"]).process_group(0);
+        let mut owner = ChildOwner::spawn(&mut command, Arc::new(AtomicBool::new(false)))
+            .expect("start owned child that terminates by signal");
+        let pid = owner.child_mut().id();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let observation = loop {
+            if let Some(observation) = owner
+                .observe_non_reaping_exit()
+                .expect("observe the retained signaled child without reaping")
+            {
+                break observation;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "signaled owned child did not publish its exit status"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(observation, ExitObservation::Signaled(15));
+        assert!(
+            !owner.reaped,
+            "signal observation must leave the child unreaped"
+        );
+        assert_eq!(
+            owner.child_mut().id(),
+            pid,
+            "the signaled Child remains retained"
+        );
     }
 
     #[test]
@@ -2750,6 +3174,86 @@ else:
             "managed lifecycle cancellation: accepted={accepted}, rejected={rejected}, drained_heartbeats={drained_heartbeats}, shutdown_after={:?}",
             drop_started.elapsed()
         );
+
+        drop(session);
+        drop(fixture);
+    }
+
+    #[test]
+    fn pre_hello_eof_reports_sanitized_bounded_evidence_and_hello_eof_omits_it() {
+        if !private_ssh_prerequisites_available() {
+            eprintln!(
+                "skipping remote lifecycle diagnostic test: private SSH prerequisites unavailable"
+            );
+            return;
+        }
+
+        let fixture = SshFixture::start();
+        let connection = fixture.connection();
+        let nonce = OpenRequestNonce::generate();
+        let session = start_fixture_session(&fixture, &connection, nonce);
+        let failure_marker = fixture.remote_root.join(".prehello-diagnostic-failure");
+        fs::write(&failure_marker, b"controlled failure")
+            .expect("enable controlled pre-Hello SSH fixture failure");
+
+        let started_at = Instant::now();
+        let (failure, failure_receiver) = run_fixture_attempt(
+            Arc::clone(&connection),
+            nonce,
+            started_at + Duration::from_secs(8),
+        );
+        let diagnostic = failure.expect_err("controlled SSH command should close before Hello");
+        assert!(
+            started_at.elapsed() < Duration::from_secs(8),
+            "stderr beyond the retention cap stalled the managed SSH child"
+        );
+        assert!(
+            diagnostic.contains("stderr_class=ssh_authentication_or_host_key_failure"),
+            "expected the allowlisted failure class in {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.contains("child_status=unknown")
+                || diagnostic.contains("child_status=exit_code:")
+                || diagnostic.contains("child_status=signal:"),
+            "expected an observed numeric status or honest unknown status in {diagnostic:?}"
+        );
+        assert!(
+            !diagnostic.contains("ZMUX_PREHELLO_CANARY_SECRET")
+                && !diagnostic.contains("Permission denied"),
+            "diagnostic exposed raw fixture stderr: {diagnostic:?}"
+        );
+        assert!(matches!(
+            failure_receiver.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
+
+        fs::remove_file(&failure_marker).expect("disable controlled pre-Hello SSH failure");
+        let lifecycle_script =
+            PathBuf::from(nonce.remote_integration_directory()).join("claude-lifecycle-stream.py");
+        fs::write(&lifecycle_script, HELLO_THEN_CLOSE_PEER)
+            .expect("install real fixture peer that accepts Hello then closes");
+        let (after_hello, hello_receiver) = run_fixture_attempt(
+            Arc::clone(&connection),
+            nonce,
+            Instant::now() + Duration::from_secs(8),
+        );
+        let post_hello = after_hello.expect_err("fixture peer closes after Active");
+        assert!(
+            post_hello.contains("hello=true, active=true"),
+            "expected the existing post-Hello EOF report in {post_hello:?}"
+        );
+        assert!(
+            !post_hello.contains("stderr_class=")
+                && !post_hello.contains("child_status=")
+                && !post_hello.contains("PRE_HELLO_CAPTURE_CANARY")
+                && !post_hello.contains("POST_HELLO_CANARY")
+                && !post_hello.contains("Permission denied"),
+            "post-Hello EOF emitted pre-Hello evidence: {post_hello:?}"
+        );
+        assert!(matches!(
+            hello_receiver.try_recv(),
+            Ok(Message::Connected { .. })
+        ));
 
         drop(session);
         drop(fixture);

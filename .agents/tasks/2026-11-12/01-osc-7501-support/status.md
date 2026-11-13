@@ -6,169 +6,36 @@
 
 ## Current delivery gates
 
-- Combined SSH readiness, remaining receipt deadline and coalesced resize
-  fixture repairs passed final aggregate **763/0/7** in 263.16 seconds; source
-  fingerprints unchanged and unrelated work preserved. SSH independent review
-  accepted with no findings; original geometry/input/lineage checks remain.
-  Commit/push and fresh Foundation/universal/retained-linkage attribution follow.
-  Original admission/EPERM causes remain unproven; these are fixture repairs.
+- Final source after review corrections passed aggregate **765/0/7**, 277.41
+  seconds, stable fingerprints and preserved unrelated work. Focused owner
+  tests passed 10/10. Setup sourcing fails closed with `&&`; closed stderr is
+  excluded from the actual macOS poll slice. Commit/push and hosted retry follow.
+  These changes capture evidence; no historical startup cause is claimed.
 
-- Managed SSH readiness and hook receipt deadline fixture repairs passed focused
-  checks and independent review with no findings. Combined aggregate then
-  stopped at `lifecycle.rs:804`, where a coalesced resize returned Busy
-  (**614/1/5**, source stable and preservation matched). A narrow fixture
-  correction is active, retaining real PTY geometry/input assertions.
-  No production request replay or timeout change is authorized by this failure.
+- Private-file setup transport and pre-Hello diagnostics passed combined local
+  aggregate **765/0/7** in 292.23 seconds, source stable and unrelated work
+  preserved. Two new owner tests cover bounded stderr/privacy and non-reaping
+  exit/signal observations. Production review remains active before push.
 
-- `6230bd4` hosted retry has two distinct failures under investigation:
-  Foundation macOS Codex entered its untracked fallback after route admission
-  was not confirmed; universal macOS failed a per-hook exact event receipt
-  socket wait in `connection.rs:549` with WouldBlock. Both full logs are retained
-  under `/tmp/zmux-osc7501-final-6230bd4/`. Separate read-only diagnoses are
-  active. EPERM and startup retry messages are not attributed as causes.
-  App compilation/native sizing/Programs acceptance did not run.
-
-- Latest source pushed: `6230bd4fb6842d15901f1c02daab7fa91dfb9dea`.
-  Final local aggregate **763/0/7**, 263.27 seconds, source stable and unrelated
-  work preserved. [Foundation 43398620022](https://github.com/ashutoshpw/zmux/actions/runs/43398620022)
-  and [universal 43398619986](https://github.com/ashutoshpw/zmux/actions/runs/43398619986)
-  are queued. All 229 retained linked-engine Git pins match this commit.
-  Final native viewport/Programs acceptance and final artifact remain required.
-
-- Provider lifecycle fixture now reuses bounded Desktop reads throughout its
-  existing three tests, including the original eight-second live deadline.
-  Parent accepted the mechanical diff; final aggregate **763/0/7**, 263.27
-  seconds, source stable and unrelated work preserved. Commit/push follows.
-  Workspace viewport correction still requires executed native acceptance.
-
-- Universal `43395036940` at `0742e26` failed during aggregate validation:
-  provider lifecycle fixture `generic_provider_observations_are_local_control_actions_with_explicit_ends`
-  unwrapped transient Desktop snapshot Busy at line 805. App/native checks did
-  not run, so the workspace viewport fix remains natively unverified. A
-  single-file bounded snapshot-reader repair is active; assertions and mutation
-  submissions remain intact. No app artifact was produced.
-
-- Latest source pushed: `0742e26029a872449518a23eb5c5d9f30f7e3d0a`.
-  [Universal macOS 43395036940](https://github.com/ashutoshpw/zmux/actions/runs/43395036940)
-  is queued. Final local aggregate passed **763/0/7**, 259.96 seconds;
-  retained engine source closure is unchanged (229/229 Git pins verified).
-  The latest fixture-only Swift path did not trigger Foundation; the universal
-  job still executes its aggregate before native checks. Final artifact and
-  actual Programs image remain required.
-
-- Workspace drag fixture now honors its captured NSWindow minimum through
-  AppKit frame-to-content conversion. Original scroll/visibility/callback checks
-  remain. Parent accepted the small fixture diff; final local aggregate passed
-  **763/0/7** in 259.96 seconds, source stable and unrelated work preserved.
-  Commit/push and native acceptance follow; no portable native claim is made.
-
-- `9f2f13c` Foundation passed Linux **763/0/7**, macOS **761/0/7**.
-  Universal `43386617074` built the app and passed selection. Extracted
-  scheduled-message receipt records **passed**, all 16 checks including lost
-  create-reply receipt recovery; summary records the expected create/status/show
-  order. No functional scheduler fix is inferred from a successful retry.
-- The new first failure is broad smoke workspace drag geometry: after shrinking
-  the window and establishing nonzero scroll, expanded group header/anchor drop
-  points are outside the sidebar viewport. Read-only diagnosis is active.
-  Final sidebar/Programs acceptance and final upload remain skipped.
-
-- At `9f2f13c`, both Foundation jobs succeeded. The macOS browser-only locator
-  step was skipped and is not claimed as executed. Universal `43386617074` is
-  still running its aggregate step; no failure or native result is established
-  yet. Initial verifier returned pending, so continued verification is required
-  through this same existing run; do not rerun or change source for a pending
-  workflow. Final app and Programs acceptance remain pending.
-
-- Diagnostic source committed/pushed as `9f2f13c3f6742ef8b69af10f6a75a9960ef88682`.
-  Final aggregate **763/0/7**, 261.59 seconds, source stable and unrelated work
-  preserved. [Foundation 43386617224](https://github.com/ashutoshpw/zmux/actions/runs/43386617224)
-  and [universal 43386617074](https://github.com/ashutoshpw/zmux/actions/runs/43386617074)
-  are queued/running. This is one instrumented native experiment, not a
-  functional scheduler fix. All 229 retained linked-engine source pins match
-  this commit; the previously accepted `2e2c9d3` artifact is reused explicitly.
-
-- Native receipt diagnostic slice passed final local aggregate **763/0/7**,
-  261.59 seconds, source stable and unrelated work preserved. Independent
-  scoped review accepted; parent repaired its bounded-read P3 and passed
-  focused bounds/privacy probes. Commit/push and one instrumented native run
-  follow. No functional scheduler repair or app delivery is claimed.
-
-- Scheduled receipt diagnosis found a native ABI nonzero-error boundary, but
-  retained evidence lacks the status number and private RPC action log. A
-  diagnostic-only implementation is active: capture a bounded status/class,
-  observable UI stage and allowlisted RPC action summary before cleanup.
-  Keep one create, one receipt-status query, existing deadlines and no replay.
-  No functional scheduler fix is yet supported by the evidence.
-
-- Universal `43376189745` at `428e47d` passed aggregate checks, universal app
-  build and terminal-selection acceptance. It then failed packaged scheduled
-  messages smoke: after the deliberate lost-create-reply Unknown state, Check
-  Request Status did not select one populated job before the fixture deadline.
-  Exact evidence is in the new hosted reference. Read-only receipt-path
-  diagnosis is active; no cause is inferred from the timeout alone.
-  Programs/sidebar acceptance and final upload were skipped.
-
-- Latest pushed source is `428e47d42d8b6474cbb1770c003e3b22995fd144`.
-  The native metadata compile-input repair passed local input/PTY validation
-  and aggregate **763/0/7** in 263.03 seconds; unrelated work is preserved.
-  [Universal macOS 43376189745](https://github.com/ashutoshpw/zmux/actions/runs/43376189745)
-  is running. Its aggregate/native checks and final artifact remain required.
-- The helper-only paths did not trigger Foundation; its latest Linux/macOS
-  acceptance remains at `2e2c9d3`. All 229 retained Ghostty source pins were
-  rechecked against Git blobs at `428e47d` and match exactly, so accepted linked
-  execution is reused with explicit earlier artifact source attribution.
-  No new engine or linkage workflow was dispatched.
-
-- Source `2e2c9d3`: Foundation passed Linux **763/0/7** and macOS **761/0/7**;
-  retained Ghostty linkage passed, all 229 source pins matched, both Apple
-  compile/link and all ARM engine/Session 7501 execution passed.
-- Universal `43371105829` built the app, then failed terminal-selection
-  acceptance at its metadata Swift compile. Its explicit input closure omitted
-  `ProgramAlertDelivery.swift`, leaving ProgramAlertEventGate and
-  ProgramAlertSnapshotMode unresolved in NotificationDelivery. A narrow helper
-  input-list repair passed its inventory/PTY check and parent review; final
-  aggregate **763/0/7** in 263.03 seconds, source stable and unrelated work
-  preserved. App/sidebar acceptance and final upload were
-  skipped, so the retained candidate is not accepted delivery.
-
-- New validated source committed and pushed as
-  `2e2c9d3445574b51569a2428bf8962061332165d`. Final aggregate **763/0/7**,
-  267.16 seconds, source stable and unrelated work preserved.
-  [Foundation 43371105849](https://github.com/ashutoshpw/zmux/actions/runs/43371105849),
-  [universal macOS 43371105829](https://github.com/ashutoshpw/zmux/actions/runs/43371105829),
-  and [retained linkage 43371114352](https://github.com/ashutoshpw/zmux/actions/runs/43371114352)
-  are running/queued. Engine libraries were not rebuilt. Final artifact
-  verification is pending; the older outcomes below are historical.
-
-- Prior pushed source: `82df3353d2bea3a9b2f6919ba67b48b2df5fb05a`.
-  Fixture reviews accepted and final local `scripts/check` passed **763/0/7**
-  in 282.56 seconds, source stable and unrelated work preserved.
-- [Foundation 43366740329](https://github.com/ashutoshpw/zmux/actions/runs/43366740329):
-  Linux passed **763/0/7**. macOS failed only
-  `managed_ssh_bootstrap_fits_a_single_exec_argument`: spawning `/bin/true`
-  returned ENOENT before the size assertion (**12/1/2** shell suite).
-  [Universal macOS 43366740304](https://github.com/ashutoshpw/zmux/actions/runs/43366740304)
-  failed at the same fixture. Both newer checkpoint/provider fixtures passed.
-  The exact reason for that executable's absence is not established.
-- The narrow test-only portable exec-target repair passed focused **1/1** and
-  shell integration **13/0/2**, formatting and strict scoped Clippy. Parent
-  accepted the small diff. Aggregate check then stopped on an independent
-  Session exit-wait fixture snapshot `Busy` unwrap (278/1/3, source unchanged
-  and unrelated work preserved). The bounded same-deadline read repair passed all three reconnect tests;
-  parent accepted the small fixture-only diff. Final combined aggregate passed
-  **763/0/7** in 267.16 seconds, source stable and unrelated work preserved.
-  The bootstrap fixture retains actual
-  single-argument exec, success and the 64 KiB budget assertion, using the
-  suite's existing `/bin/sh` dependency with an inert command and unused payload.
-- [Ghostty linkage 43366752162](https://github.com/ashutoshpw/zmux/actions/runs/43366752162)
-  passed. Artifact `14010980716`: 22,998,513 bytes, SHA-256
-  `55866ceb9cf1045b24bd52b665acda50f66d627028c040afea9b66791958e2e2`;
-  all 229 source pins match `82df335`. ARM engine **4/4**, linked 7501 **1/1**,
-  Session **4/4**, linked real-PTY 7501 **1/1**, both Apple compile/link phases
-  passed. Intel execution and native host execution were not requested.
-- No accepted app download exists yet. Final universal packaging, archive and
-  source verification, native Programs receipts and actual screenshot inspection
-  remain required. Candidate archives do not establish delivery.
+- Latest source pushed: `2efb76d9bcbb9e0a00015602b8bcaf81c00920de`.
+  Local aggregate **763/0/7** in 263.16 seconds; source stable and unrelated
+  work preserved. Foundation `43407437043` passed macOS **761/0/7** and Ubuntu
+  **763/0/7** at that exact source.
+- Fresh retained Ghostty `43407437492` passed: artifact `14027538458`,
+  22,998,332 bytes, SHA-256
+  `33e57a5fc6fe0a04dda8ce2531e157ff83f52e2b6f2336e197ee4505b7c40ae7`;
+  all 229 source pins matched. Both Apple compile/link and ARM engine **4/4**,
+  linked 7501 **1/1**, Session **4/4**, real-PTY 7501 Session **1/1** passed.
+  Intel execution and native-host/AppKit execution were not requested.
+- Universal `43407437131` failed its aggregate in two managed SSH provider
+  fixtures. Codex's typed readiness Python arrived visibly garbled and raised
+  SyntaxError; OpenCode entered untracked fallback with no lifecycle Hello.
+  A fixture-only private-file setup transport repair is active; a separate
+  read-only investigation covers the pre-hello exits and lost stderr evidence.
+  No historical admission or EPERM cause is inferred from these logs.
+- App build/native viewport/Programs acceptance/final upload were skipped.
+  No accepted final app download exists. Earlier scheduled-message smoke
+  passed all 16 checks at `9f2f13c`; its prior timeout cause remains unproven.
 
 ## Earlier overall acceptance notes
 

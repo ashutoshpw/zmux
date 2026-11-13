@@ -114,3 +114,16 @@ Busy-aware read. The earlier complete 257.26-second receipt is archived as
 `check-round31`; the observed resize Busy failure remains `check-round30`.
 One captured Session test input changed, requiring fresh retained linkage
 source attribution; engine library bytes need no rebuild.
+
+Private-file managed SSH setup and bounded pre-Hello owner diagnostics aggregate
+passed **765/0/7** in 292.23 seconds. Two new owner-boundary diagnostic tests are
+included. Source fingerprints remained unchanged and unrelated work was
+preserved. Production review is still pending; this is not hosted/native or
+app delivery acceptance. Previous complete receipt is `check-round32`.
+
+After the production review correction (closed stderr excluded from the actual
+macOS poll slice) and cleanup, the final aggregate passed **765/0/7** in 277.41
+seconds; source fingerprints unchanged and unrelated work preserved. Focused
+lifecycle-owner tests passed 10/10 again. CLI setup launches require successful
+sourcing via `&&`. Prior 292.23-second receipt is archived as `check-round33`.
+The two review findings are resolved; fresh hosted/native delivery remains.
