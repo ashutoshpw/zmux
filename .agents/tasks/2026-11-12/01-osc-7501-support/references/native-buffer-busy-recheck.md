@@ -1,0 +1,28 @@
+# Native response-buffer repair source recheck
+
+**Reviewed source:** `main` at `7f6d5ac29c4d51d00d4f08f416d2dae7b1d41557` plus the uncommitted `crates/native-bridge/src/lib.rs` repair.
+
+**Scope:** the `lib.rs` diff, its buffer/handle C ABI and Swift consumer, and `native-buffer-busy-diagnosis.md` / `native-buffer-busy-repair.md`. This was a read-only source review. I did not run tests, Cargo, builds, or `scripts/check`; the parent owns aggregate checks and hosted artifact work. No other workspace paths were changed by this review.
+
+## Verdict
+
+**No blocking or actionable source findings. Approve the repair and the owner-boundary regression at source-review level.** The ABI declarations remain unchanged, and the regression directly covers the contention interleaving that could make a returned response token unreadable. This is not native macOS or hosted acceptance evidence.
+
+## Review evidence
+
+- `crates/native-bridge/src/lib.rs:78-115` gives desktop/core handles and response buffers separate registries while keeping one `NEXT_ID`. `HandleRegistry::insert` and `Reservation::new` both use the same `AtomicU64`; `fetch_update` issues nonzero IDs in atomic modification order and rejects zero or an increment past `u64::MAX` as `CAPACITY`. IDs are not reused. The highest issued ID is `u64::MAX - 1`, leaving `u64::MAX` as the exhausted state, consistent with the prior checked-increment allocator and the fail-before-overflow contract.
+- `lib.rs:117-159` keeps `Reservation::new` on the dedicated buffer mutex's `try_lock`, checks `entries.len()` (including `None` reservations and published `Some` entries) against the existing 16-slot cap, and inserts the reservation before the call-site effect. Publish and failed-reservation cleanup mutate only the reserved map entry. On a poisoned buffer mutex, cleanup logs and leaves the slot; the registry is already poisoned and all subsequent buffer access/admission returns `INTERNAL`, so this does not create a recoverable-capacity failure path.
+- `lib.rs:180-198, 546-590` shows core/desktop lookups still use the handle registry's `try_lock`. Buffer lookup uses only the buffer registry lock to find and clone an `Arc`; `zmux_buffer_copy` copies after that helper releases the lock. Release removes the published entry under lock, then drops the `Arc` after unlocking. The critical sections contain bounded map and reference-count operations, with no payload copy or desktop/process work. The checked call paths acquire and release the handle registry before reserving or consuming a buffer, so the split introduces no nested handle/buffer lock order.
+- `lib.rs:504-543` keeps core request admission on the same nonblocking handle lookup and reserves output before applying an action. The other `Reservation::new` call sites were checked: queueing, shared-terminal dispatch, transfer/profile/window/file/download/schedule/browser/notification work, and shutdown begin reserve before their effect-bearing owner call. Read-only snapshot work may precede reservation. No request retry or replay was added. `NativeBridge.swift:233-253, 833-845` still dispatches once and consumes the returned token once; the diagnosis correctly treats the exact hosted lock owner as unknown.
+- `crates/native-bridge/include/zmux.h:22-34` still declares process-local monotonically allocated tokens, the same exported signatures, and the same status values. `ABI_VERSION` remains 1. No header or symbol change is present in the diff; buffer-lock contention no longer produces the incidental `BUSY` response, and the header does not promise that these accessors are nonblocking.
+- `lib.rs:379-461` adds an owner-level regression that creates real snapshot tokens, holds the actual private handle mutex, and invokes the exported length/copy/release functions while that mutex is held. It compares the copied response bytes, checks release and stale-release results, and checks increasing IDs across core/buffer/core types. Its cleanup runs before assertions that fail the intended-red case. Existing C ABI coverage at `tests/abi.c:747-753` independently checks cross-type rejection and stale handles; capacity-before-mutation remains covered at `abi.c:455-475, 758-773`.
+
+## Regression assessment
+
+The handle-contention test protects an externally observable C ABI contract and fails on the previous owner for the intended reason, as recorded in the repair reference. It uses the production mutex and exported functions without adding a production test hook. The paired `allocate_id_from` overflow test is also worth retaining: reaching exhaustion through the real process-global allocator is infeasible, while the helper is production code used directly by `allocate_id`. A local atomic makes the no-wrap `CAPACITY` boundary deterministic and does not add an export, flag, or test-only wrapper. The zero-initialized case is a small defensive check for the nonzero invariant; it is not the primary value of that test.
+
+The code's `AtomicU64` requirement matches the documented universal macOS development targets (arm64 and x86_64 in `docs/development-builds.md:118-120`). This review did not build another target architecture. The repair reference reports its targeted red/green, native bridge test, C ABI/profile lease, formatting, and Clippy results; those reports were not rerun or independently verified here.
+
+## Proof limits
+
+The source repair removes handle-registry contention from response-token access, but source review cannot identify which operation held the old registry during hosted token 12's copy. It also does not establish packaged-app, physical-Mac, hosted workflow, or artifact acceptance; those remain with the parent aggregate task.

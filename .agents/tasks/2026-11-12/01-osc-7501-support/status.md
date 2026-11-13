@@ -1,6 +1,6 @@
 # Status
 
-- Continuation: both scoped repairs passed independent review. Aggregate round 35 passed **765/0/7** in 263.59 seconds with unchanged source and preserved unrelated work. The native file-panel change captures failure evidence only; no accepted final app exists. Scoped commit/push and fresh hosted delivery follow.
+- Continuation: dedicated response-buffer store passed aggregate round 36 **767/0/7** in 264.86 seconds, unchanged source and preserved unrelated work. Independent review accepted with no actionable findings. Returned-token contention has a deterministic old-owner failure/new-owner success; exact hosted lock holder and file-panel connection remain unknown. No accepted final app exists.
 
 - **State:** in-progress
 - **Updated:** 2026-11-13
@@ -8,7 +8,19 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `ab789718c1cea30b8cf610f9839bb1b1b1b665ad`.
+- Latest pushed source: `7f6d5ac29c4d51d00d4f08f416d2dae7b1d41557`.
+  Scoped OpenCode synthetic help repair and bounded native file-load failure
+  evidence passed independent review. Final local round 35 passed **765/0/7**
+  in 263.59 seconds, with unchanged source and preserved unrelated work.
+  Exact-source Foundation passed Ubuntu **765/0/7**, macOS **763/0/7**.
+  Universal run `43429978535` failed before the broad native smoke at Cloud
+  lifecycle response `buffer_copy token=12 failed (-4)`; final upload/Programs
+  acceptance absent. Per-tab file-load diagnostic was not exercised.
+  The dedicated response store repair passed owner red/green and nativebridge
+  50 tests plus C ABI; final aggregate **767/0/7**, 264.86 seconds, and
+  independent source review accepted. Scoped commit/push and fresh hosted
+  validation follow; no request replay or operation-deadline change.
+- Previous source: `ab789718c1cea30b8cf610f9839bb1b1b1b665ad`.
   Final local aggregate **765/0/7**, 277.41 seconds, unchanged fingerprints and
   preserved unrelated work. Owner tests passed 10/10; review P2s are fixed:
   setup sourcing gates provider launch, and closed stderr is excluded from the

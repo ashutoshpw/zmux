@@ -144,3 +144,7 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-file-panel-load-evidence.md](references/native-file-panel-load-evidence.md) — pre-cleanup per-tab status and gate counts preserve original batch/deadline; cause remains unknown.
 - [references/opencode-help-preflight-recheck.md](references/opencode-help-preflight-recheck.md) — independent scoped acceptance; exact help dispatch and existing owner assertions preserved.
 - [references/native-file-panel-load-evidence-recheck.md](references/native-file-panel-load-evidence-recheck.md) — independent source acceptance of bounded diagnostics and unchanged sixteen-tab contract.
+- [references/hosted-final-7f6d5ac.md](references/hosted-final-7f6d5ac.md) — both-platform Foundation pass; native Cloud response buffer Busy stopped packaged acceptance before file-panel.
+- [references/native-buffer-busy-diagnosis.md](references/native-buffer-busy-diagnosis.md) — post-dispatch response copy contends with handle registry; separate bounded response store without replay.
+- [references/native-buffer-busy-repair.md](references/native-buffer-busy-repair.md) — dedicated bounded response store, deterministic returned-token contention red/green and unchanged C ABI admission gates.
+- [references/native-buffer-busy-recheck.md](references/native-buffer-busy-recheck.md) — independent source acceptance of dedicated response slots, non-replay and ID/capacity ownership.

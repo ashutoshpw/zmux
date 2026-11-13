@@ -13,7 +13,10 @@ use std::{
     io::{self, Write},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock, TryLockError},
+    sync::{
+        Arc, Mutex, OnceLock, TryLockError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use zmux_desktop_runtime::{
     Command as DesktopCommand, Desktop, DesktopError, Request as DesktopRequest, Shell,
@@ -63,7 +66,6 @@ impl ZmuxResult {
 enum Entry {
     Desktop(Arc<NativeDesktop>),
     Core(Arc<Mutex<WorkspaceStore>>),
-    Buffer(Option<Arc<Vec<u8>>>),
 }
 struct NativeDesktop {
     frame_history: Mutex<native_frames::History>,
@@ -73,29 +75,43 @@ struct NativeDesktop {
     control: Option<ControlServer>,
     control_cleanup_failure: Mutex<Option<String>>,
 }
-struct Registry {
-    next: u64,
+#[derive(Default)]
+struct HandleRegistry {
     entries: HashMap<u64, Entry>,
 }
-impl Default for Registry {
-    fn default() -> Self {
-        Self {
-            next: 1,
-            entries: HashMap::new(),
-        }
-    }
-}
-impl Registry {
+impl HandleRegistry {
     fn insert(&mut self, entry: Entry) -> Result<u64, i32> {
-        let id = self.next;
-        self.next = self.next.checked_add(1).ok_or(CAPACITY)?;
+        let id = allocate_id()?;
         self.entries.insert(id, entry);
         Ok(id)
     }
 }
-static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-fn registry() -> &'static Mutex<Registry> {
-    REGISTRY.get_or_init(|| Mutex::new(Registry::default()))
+#[derive(Default)]
+struct BufferRegistry {
+    // `None` is a reserved response slot; `Some` is a published owned response.
+    entries: HashMap<u64, Option<Arc<Vec<u8>>>>,
+}
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static HANDLE_REGISTRY: OnceLock<Mutex<HandleRegistry>> = OnceLock::new();
+static BUFFER_REGISTRY: OnceLock<Mutex<BufferRegistry>> = OnceLock::new();
+
+fn allocate_id_from(next: &AtomicU64) -> Result<u64, i32> {
+    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        if id == 0 { None } else { id.checked_add(1) }
+    })
+    .map_err(|_| CAPACITY)
+}
+
+fn allocate_id() -> Result<u64, i32> {
+    allocate_id_from(&NEXT_ID)
+}
+
+fn handle_registry() -> &'static Mutex<HandleRegistry> {
+    HANDLE_REGISTRY.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
+fn buffer_registry() -> &'static Mutex<BufferRegistry> {
+    BUFFER_REGISTRY.get_or_init(|| Mutex::new(BufferRegistry::default()))
 }
 
 // Reserve response storage before applying an action, so capacity rejection cannot mutate state.
@@ -105,18 +121,14 @@ struct Reservation {
 }
 impl Reservation {
     fn new() -> Result<Self, i32> {
-        let mut registry = registry().try_lock().map_err(lock_status)?;
-        if registry
-            .entries
-            .values()
-            .filter(|e| matches!(e, Entry::Buffer(_)))
-            .count()
-            >= MAX_BUFFERS
-        {
+        let mut buffers = buffer_registry().try_lock().map_err(lock_status)?;
+        if buffers.entries.len() >= MAX_BUFFERS {
             return Err(CAPACITY);
         }
+        let id = allocate_id()?;
+        buffers.entries.insert(id, None);
         Ok(Self {
-            id: registry.insert(Entry::Buffer(None))?,
+            id,
             published: false,
         })
     }
@@ -124,9 +136,10 @@ impl Reservation {
         if bytes.len() > MAX_RESPONSE_BYTES {
             return Err(INTERNAL);
         }
-        let mut registry = registry().lock().map_err(|_| INTERNAL)?;
-        let slot = registry.entries.get_mut(&self.id).ok_or(INTERNAL)?;
-        *slot = Entry::Buffer(Some(Arc::new(bytes)));
+        let bytes = Arc::new(bytes);
+        let mut buffers = buffer_registry().lock().map_err(|_| INTERNAL)?;
+        let slot = buffers.entries.get_mut(&self.id).ok_or(INTERNAL)?;
+        *slot = Some(bytes);
         self.published = true;
         Ok(self.id)
     }
@@ -134,12 +147,14 @@ impl Reservation {
 impl Drop for Reservation {
     fn drop(&mut self) {
         if !self.published {
-            match registry().lock() {
-                Ok(mut registry) => {
-                    registry.entries.remove(&self.id);
+            let removed = match buffer_registry().lock() {
+                Ok(mut buffers) => buffers.entries.remove(&self.id),
+                Err(error) => {
+                    eprintln!("zmux bridge reservation cleanup failed: {error}");
+                    return;
                 }
-                Err(error) => eprintln!("zmux bridge reservation cleanup failed: {error}"),
-            }
+            };
+            drop(removed);
         }
     }
 }
@@ -163,16 +178,16 @@ enum Command {
 }
 
 fn core(id: u64) -> Result<Arc<Mutex<WorkspaceStore>>, i32> {
-    let registry = registry().try_lock().map_err(lock_status)?;
+    let registry = handle_registry().try_lock().map_err(lock_status)?;
     match registry.entries.get(&id) {
         Some(Entry::Core(core)) => Ok(Arc::clone(core)),
         _ => Err(INVALID_HANDLE),
     }
 }
 fn buffer(id: u64) -> Result<Arc<Vec<u8>>, i32> {
-    let registry = registry().try_lock().map_err(lock_status)?;
-    match registry.entries.get(&id) {
-        Some(Entry::Buffer(Some(bytes))) => Ok(Arc::clone(bytes)),
+    let buffers = buffer_registry().lock().map_err(|_| INTERNAL)?;
+    match buffers.entries.get(&id) {
+        Some(Some(bytes)) => Ok(Arc::clone(bytes)),
         _ => Err(INVALID_HANDLE),
     }
 }
@@ -361,6 +376,90 @@ mod terminal_link_dispatch_tests {
     }
 }
 
+#[cfg(test)]
+mod response_buffer_registry_tests {
+    use super::*;
+
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn id_allocator_is_nonzero_monotonic_and_fails_closed_at_capacity() {
+        let next = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_id_from(&next), Ok(u64::MAX - 1));
+        assert_eq!(allocate_id_from(&next), Err(CAPACITY));
+        assert_eq!(allocate_id_from(&next), Err(CAPACITY));
+
+        let exhausted = AtomicU64::new(0);
+        assert_eq!(allocate_id_from(&exhausted), Err(CAPACITY));
+    }
+
+    #[test]
+    fn response_buffer_access_is_independent_of_handle_registry_contention() {
+        let _serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let core = zmux_core_create();
+        assert_eq!(core.status, OK);
+
+        let request = br#"{"version":1,"command":{"method":"snapshot"}}"#;
+        // SAFETY: request remains readable for the duration of the FFI call.
+        let first = unsafe { zmux_core_dispatch(core.value, request.as_ptr(), request.len()) };
+        // SAFETY: request remains readable for the duration of the FFI call.
+        let second = unsafe { zmux_core_dispatch(core.value, request.as_ptr(), request.len()) };
+        assert_eq!(first.status, OK);
+        assert_eq!(second.status, OK);
+        assert_ne!(core.value, first.value);
+        assert_ne!(core.value, second.value);
+        assert!(core.value < first.value && first.value < second.value);
+
+        let first_length = zmux_buffer_length(first.value);
+        assert_eq!(first_length.status, OK);
+        let mut expected = vec![0; first_length.value as usize];
+        // SAFETY: expected owns writable storage of the reported length.
+        assert_eq!(
+            unsafe { zmux_buffer_copy(first.value, expected.as_mut_ptr(), expected.len()) },
+            OK
+        );
+        assert_eq!(zmux_buffer_release(first.value), OK);
+        assert_eq!(zmux_core_destroy(core.value), OK);
+
+        let second_length = zmux_buffer_length(second.value);
+        assert_eq!(second_length.status, OK);
+        let mut actual = vec![0; second_length.value as usize];
+
+        let handles = handle_registry()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let contended_length = zmux_buffer_length(second.value);
+        // SAFETY: actual owns writable storage of the reported length.
+        let contended_copy =
+            unsafe { zmux_buffer_copy(second.value, actual.as_mut_ptr(), actual.len()) };
+        let contended_release = zmux_buffer_release(second.value);
+        drop(handles);
+
+        // The old owner returns BUSY above; release the token after dropping the handle lock so
+        // the intended-red run can fail cleanly without leaving registry state behind.
+        let cleanup_release = if contended_release == OK {
+            OK
+        } else {
+            zmux_buffer_release(second.value)
+        };
+        let stale_release = zmux_buffer_release(second.value);
+        let next_core = zmux_core_create();
+        assert_eq!(next_core.status, OK);
+        let next_core_id = next_core.value;
+        assert_eq!(zmux_core_destroy(next_core_id), OK);
+
+        assert_eq!(cleanup_release, OK);
+        assert_eq!(contended_length.status, OK);
+        assert_eq!(contended_copy, OK);
+        assert_eq!(actual, expected);
+        assert_eq!(contended_release, OK);
+        assert_eq!(stale_release, INVALID_HANDLE);
+        assert!(next_core_id > second.value);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_abi_version() -> u32 {
     ABI_VERSION
@@ -369,7 +468,7 @@ pub extern "C" fn zmux_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_core_create() -> ZmuxResult {
     guard(|| {
-        let mut registry = registry().try_lock().map_err(lock_status)?;
+        let mut registry = handle_registry().try_lock().map_err(lock_status)?;
         if registry
             .entries
             .values()
@@ -388,7 +487,7 @@ pub extern "C" fn zmux_core_create() -> ZmuxResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_core_destroy(id: u64) -> i32 {
     guard(|| {
-        let mut registry = registry().try_lock().map_err(lock_status)?;
+        let mut registry = handle_registry().try_lock().map_err(lock_status)?;
         if !matches!(registry.entries.get(&id), Some(Entry::Core(_))) {
             return Err(INVALID_HANDLE);
         }
@@ -474,25 +573,32 @@ pub unsafe extern "C" fn zmux_buffer_copy(id: u64, destination: *mut u8, capacit
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_buffer_release(id: u64) -> i32 {
     guard(|| {
-        let mut registry = registry().try_lock().map_err(lock_status)?;
-        if !matches!(registry.entries.get(&id), Some(Entry::Buffer(Some(_)))) {
-            return Err(INVALID_HANDLE);
-        }
-        registry.entries.remove(&id);
+        let bytes = {
+            let mut buffers = buffer_registry().lock().map_err(|_| INTERNAL)?;
+            if !matches!(buffers.entries.get(&id), Some(Some(_))) {
+                return Err(INVALID_HANDLE);
+            }
+            buffers
+                .entries
+                .remove(&id)
+                .and_then(|entry| entry)
+                .ok_or(INVALID_HANDLE)?
+        };
+        drop(bytes);
         Ok(0)
     })
     .status
 }
 
 fn desktop(id: u64) -> Result<Arc<Desktop>, i32> {
-    let registry = registry().try_lock().map_err(lock_status)?;
+    let registry = handle_registry().try_lock().map_err(lock_status)?;
     match registry.entries.get(&id) {
         Some(Entry::Desktop(desktop)) => Ok(Arc::clone(&desktop.runtime)),
         _ => Err(INVALID_HANDLE),
     }
 }
 fn native_desktop(id: u64) -> Result<Arc<NativeDesktop>, i32> {
-    let registry = registry().try_lock().map_err(lock_status)?;
+    let registry = handle_registry().try_lock().map_err(lock_status)?;
     match registry.entries.get(&id) {
         Some(Entry::Desktop(desktop)) => Ok(Arc::clone(desktop)),
         _ => Err(INVALID_HANDLE),
@@ -611,7 +717,7 @@ fn create_configured_desktop_with_leases(
     profile_lease_directory: Option<PathBuf>,
 ) -> Result<u64, i32> {
     let profile_catalog_directory = options.state_directory.clone();
-    let mut registry = registry().try_lock().map_err(lock_status)?;
+    let mut registry = handle_registry().try_lock().map_err(lock_status)?;
     if registry
         .entries
         .values()
@@ -1349,7 +1455,7 @@ pub extern "C" fn zmux_desktop_shutdown_release(id: u64, ticket: u64) -> i32 {
         if !shutdown_report(&desktop, ticket)?.physical_cleanup_complete {
             return Err(BUSY);
         }
-        let mut registry = registry().try_lock().map_err(lock_status)?;
+        let mut registry = handle_registry().try_lock().map_err(lock_status)?;
         if !matches!(registry.entries.get(&id), Some(Entry::Desktop(_))) {
             return Err(INVALID_HANDLE);
         }
