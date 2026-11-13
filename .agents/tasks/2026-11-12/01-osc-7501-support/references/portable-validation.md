@@ -56,3 +56,14 @@ Final fixture/diagnostic and cleanup-proof full check passed **759/0/7** in 264.
 Final retirement-owner and fixture aggregate passed **763/0/7** in 262.13 seconds, including full C ABI/native lease checks, source unchanged and unrelated preservation matched. Prior failed aggregate is archived as `check-round18`; no root cause is inferred for its isolated lease assertion.
 
 Short Unix-socket checkpoint fixture aggregate: **763/0/7** in 285.75 seconds, all static/license/C ABI gates passed, source unchanged and preservation matched. The preceding complete 262.13-second receipt is archived as `check-round19`.
+
+Provider snapshot/read and final-drain handshake fixture aggregate: **763/0/7**
+in 283.08 seconds, all static/license/C ABI gates passed, unchanged source
+fingerprints and matching unrelated preservation hashes. This validates the
+uncommitted fixture changes on `c346051`; prior complete source receipt is
+archived as `check-round20`. Post-fix hosted/native acceptance remains pending.
+
+After removing the review P3 private dirty-result assertion, final aggregate
+passed **763/0/7** in 282.56 seconds, source fingerprints unchanged and unrelated
+work preserved. Prior complete 283.08-second receipt is archived as
+`check-round21`; current receipt/log remain `final-check.{json,log}`.

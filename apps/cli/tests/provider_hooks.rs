@@ -1,5 +1,8 @@
 //! Owned plugin publication and nonblocking hook ingress through the shipped CLI.
 //! Synthetic provider --version only; no Claude invocation or user configuration.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
+
 use nix::{
     fcntl::{FcntlArg, OFlag, fcntl},
     sys::signal::{Signal, kill, killpg},
@@ -25,6 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket, client, protocol::Role};
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command as DesktopCommand, Desktop, Request, Shell,
     agent_lifecycle::{Activity, AlertKind, Connection, Provider},
@@ -107,38 +111,45 @@ impl RunningDesktop {
     }
 }
 
-fn terminal_output_for(desktop: &Desktop, session_id: zmux_workspace_core::SessionId) -> String {
-    desktop
-        .snapshot()
-        .ok()
-        .and_then(|snapshot| {
-            snapshot
-                .control_frames
-                .iter()
-                .find(|frame| frame.session_id == session_id)
-                .and_then(|frame| frame.snapshot.as_ref())
-                .map(|terminal| terminal.viewport.contents.clone())
-        })
+fn terminal_output_from_snapshot(
+    snapshot: &desktop_runtime::Snapshot,
+    session_id: zmux_workspace_core::SessionId,
+) -> String {
+    snapshot
+        .control_frames
+        .iter()
+        .find(|frame| frame.session_id == session_id)
+        .and_then(|frame| frame.snapshot.as_ref())
+        .map(|terminal| terminal.viewport.contents.clone())
         .unwrap_or_else(|| "<terminal snapshot unavailable>".into())
+}
+
+fn terminal_output_for(desktop: &Desktop, session_id: zmux_workspace_core::SessionId) -> String {
+    terminal_output_from_snapshot(&desktop_snapshot::read(desktop), session_id)
+}
+
+fn terminal_output_for_until(
+    desktop: &Desktop,
+    session_id: zmux_workspace_core::SessionId,
+    deadline: Instant,
+) -> String {
+    terminal_output_from_snapshot(&desktop_snapshot::read_until(desktop, deadline), session_id)
 }
 
 fn bounded_fixture_terminal_output(
     desktop: &Desktop,
     session_id: zmux_workspace_core::SessionId,
     private_root: &Path,
+    deadline: Instant,
 ) -> String {
     let private_root = private_root.to_string_lossy();
-    let snapshot = desktop.snapshot().ok();
+    let snapshot = desktop_snapshot::read_until(desktop, deadline);
     let terminal = snapshot
-        .as_ref()
-        .and_then(|snapshot| {
-            snapshot
-                .control_frames
-                .iter()
-                .find(|frame| frame.session_id == session_id)
-                .and_then(|frame| frame.snapshot.as_ref())
-                .map(|terminal| terminal.viewport.contents.as_str())
-        })
+        .control_frames
+        .iter()
+        .find(|frame| frame.session_id == session_id)
+        .and_then(|frame| frame.snapshot.as_ref())
+        .map(|terminal| terminal.viewport.contents.as_str())
         .unwrap_or("<terminal snapshot unavailable>");
     let mut bounded = String::new();
     let mut remaining = terminal;
@@ -553,7 +564,7 @@ fn wait_local_codex(
 ) -> zmux_desktop_runtime::agent_lifecycle::Agent {
     let deadline = Instant::now() + Duration::from_secs(12);
     loop {
-        let snapshot = desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(desktop, deadline);
         if let Some(agent) = snapshot
             .agent_lifecycle
             .iter()
@@ -590,7 +601,7 @@ fn wait_local_provider(
 ) -> zmux_desktop_runtime::agent_lifecycle::Agent {
     let deadline = Instant::now() + Duration::from_secs(12);
     loop {
-        let snapshot = desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(desktop, deadline);
         if let Some(agent) = snapshot
             .agent_lifecycle
             .iter()
@@ -608,9 +619,7 @@ fn wait_local_provider(
 }
 
 fn local_codex_completion_count(desktop: &Desktop) -> usize {
-    desktop
-        .snapshot()
-        .unwrap()
+    desktop_snapshot::read(desktop)
         .agent_alert_events
         .iter()
         .filter(|event| {
@@ -620,9 +629,20 @@ fn local_codex_completion_count(desktop: &Desktop) -> usize {
 }
 
 fn local_provider_alert_count(desktop: &Desktop, provider: Provider, kind: AlertKind) -> usize {
-    desktop
-        .snapshot()
-        .unwrap()
+    desktop_snapshot::read(desktop)
+        .agent_alert_events
+        .iter()
+        .filter(|event| event.provider == provider && event.kind == kind)
+        .count()
+}
+
+fn local_provider_alert_count_until(
+    desktop: &Desktop,
+    provider: Provider,
+    kind: AlertKind,
+    deadline: Instant,
+) -> usize {
+    desktop_snapshot::read_until(desktop, deadline)
         .agent_alert_events
         .iter()
         .filter(|event| event.provider == provider && event.kind == kind)
@@ -1520,7 +1540,7 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
 
     let startup_deadline = Instant::now() + Duration::from_secs(8);
     let (session_id, shell_root) = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, startup_deadline);
         let session_id = snapshot
             .model
             .workspaces
@@ -1585,7 +1605,8 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         }
         if provider_called.exists() {
             let report = fs::read_to_string(&args_report).unwrap_or_default();
-            let terminal_output = terminal_output_for(&running.desktop, session_id);
+            let terminal_output =
+                terminal_output_for_until(&running.desktop, session_id, setup_deadline);
             panic!(
                 "Claude started before automatic plugin publication: {report}\nterminal output:\n{terminal_output}"
             );
@@ -1593,7 +1614,7 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         assert!(
             Instant::now() < setup_deadline,
             "real automatic launch did not publish its lifecycle plugin; terminal output:\n{}",
-            terminal_output_for(&running.desktop, session_id)
+            terminal_output_for_until(&running.desktop, session_id, setup_deadline)
         );
         thread::sleep(Duration::from_millis(2));
     };
@@ -1727,7 +1748,7 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
 
     let no_prompt_deadline = Instant::now() + Duration::from_secs(5);
     let no_prompt_snapshot = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, no_prompt_deadline);
         let attention_notices = snapshot
             .notifications
             .iter()
@@ -1935,7 +1956,7 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
     );
     let rejected_deadline = Instant::now() + Duration::from_secs(2);
     let after_unrelated_shell = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, rejected_deadline);
         let rejected = snapshot.frames.iter().any(|frame| {
             frame.snapshot.as_ref().is_some_and(|terminal| {
                 terminal
@@ -1978,7 +1999,7 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
 
     let alerts_deadline = Instant::now() + Duration::from_secs(5);
     let notice_snapshot = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, alerts_deadline);
         let needs_user = snapshot
             .agent_alert_events
             .iter()
@@ -2278,7 +2299,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
 
     let startup_deadline = Instant::now() + Duration::from_secs(10);
     let (session_id, _shell_root) = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, startup_deadline);
         let session_id = snapshot
             .model
             .workspaces
@@ -2327,7 +2348,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     // probe still requires an already-running daemon within two seconds.
     let output_deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let terminal = terminal_output_for(&running.desktop, session_id);
+        let terminal = terminal_output_for_until(&running.desktop, session_id, output_deadline);
         if terminal.contains("CODEX_FIXTURE_READY") {
             break;
         }
@@ -2364,12 +2385,12 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
                 &root.join("codex-app-server.pid"),
                 &root.join("codex-app-server.sock")
             ),
-            bounded_fixture_terminal_output(&running.desktop, session_id, &root)
+            bounded_fixture_terminal_output(&running.desktop, session_id, &root, foreign_deadline)
         );
         thread::sleep(Duration::from_millis(5));
     }
     thread::sleep(Duration::from_millis(150));
-    let after_foreign = running.desktop.snapshot().unwrap();
+    let after_foreign = desktop_snapshot::read(&running.desktop);
     let local_agents = after_foreign
         .agent_lifecycle
         .iter()
@@ -2415,7 +2436,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     fs::write(&state, b"complete").unwrap();
     let completion_deadline = Instant::now() + Duration::from_secs(8);
     let completed = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, completion_deadline);
         let count = snapshot
             .agent_alert_events
             .iter()
@@ -2443,8 +2464,8 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
     fs::write(&release, b"exit provider").unwrap();
     let exit_deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let terminal = terminal_output_for(&running.desktop, session_id);
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, exit_deadline);
+        let terminal = terminal_output_from_snapshot(&snapshot, session_id);
         let ended = snapshot.agent_lifecycle.iter().find(|agent| {
             agent.provider == Provider::CodexLocal && agent.connection == Connection::Disconnected
         });
@@ -2485,7 +2506,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
         .unwrap();
     let help_deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let terminal = terminal_output_for(&running.desktop, session_id);
+        let terminal = terminal_output_for_until(&running.desktop, session_id, help_deadline);
         if terminal.contains("CODEX_HELP_PASSTHROUGH") {
             assert_eq!(fs::read_to_string(&calls).unwrap(), "launch\n");
             break;
@@ -2523,7 +2544,7 @@ fn automatic_local_codex_uses_its_exact_real_desktop_terminal_route_child() {
             })
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !terminal_output_for(&running.desktop, session_id).contains(&marker) {
+        while !terminal_output_for_until(&running.desktop, session_id, deadline).contains(&marker) {
             assert!(
                 Instant::now() < deadline,
                 "context invocation did not finish"
@@ -2640,7 +2661,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
 
     let startup_deadline = Instant::now() + Duration::from_secs(10);
     let terminal_session = loop {
-        let snapshot = running.desktop.snapshot().unwrap();
+        let snapshot = desktop_snapshot::read_until(&running.desktop, startup_deadline);
         let session = snapshot
             .model
             .workspaces
@@ -2686,7 +2707,8 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         .unwrap();
     let launch_deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let terminal =
+            terminal_output_for_until(&running.desktop, terminal_session, launch_deadline);
         if terminal.contains(r#"{"ready":true}"#) {
             break;
         }
@@ -2744,7 +2766,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     assert_eq!(initial.prompt_id, None);
     send(74, "foreign");
     thread::sleep(Duration::from_millis(100));
-    let after_foreign = running.desktop.snapshot().unwrap();
+    let after_foreign = desktop_snapshot::read(&running.desktop);
     let local_agents = after_foreign
         .agent_lifecycle
         .iter()
@@ -2817,10 +2839,11 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     );
     send(80, "complete");
     let completion_deadline = Instant::now() + Duration::from_secs(8);
-    while local_provider_alert_count(
+    while local_provider_alert_count_until(
         &running.desktop,
         Provider::OpenCodeLocal,
         AlertKind::Completed,
+        completion_deadline,
     ) != 1
     {
         assert!(
@@ -2884,7 +2907,8 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         .unwrap();
     let fallback_deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let terminal =
+            terminal_output_for_until(&running.desktop, terminal_session, fallback_deadline);
         if terminal.contains("OPENCODE_FALLBACK_LAUNCHED") {
             break;
         }
@@ -2911,10 +2935,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     assert_eq!(calls[1]["user_plugin_preserved"], true);
     assert_eq!(calls[1]["zmux_plugin_count"], 0);
     assert_eq!(
-        running
-            .desktop
-            .snapshot()
-            .unwrap()
+        desktop_snapshot::read(&running.desktop)
             .agent_lifecycle
             .iter()
             .filter(|agent| agent.provider == Provider::OpenCodeLocal)
@@ -2949,7 +2970,11 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
                 .map(|line| serde_json::from_str::<Value>(line).unwrap())
                 .collect::<Vec<_>>();
         }
-        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let terminal = terminal_output_for_until(
+            &running.desktop,
+            terminal_session,
+            delayed_fallback_deadline,
+        );
         assert!(
             Instant::now() < delayed_fallback_deadline,
             "slow OpenCode help preflight did not fail closed to one launch: {terminal}"
@@ -2982,7 +3007,11 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
     // Wait for this invocation's diagnostic, rather than inspecting an older
     // snapshot that can still contain the preceding fallback's launch marker.
     let elapsed = loop {
-        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let terminal = terminal_output_for_until(
+            &running.desktop,
+            terminal_session,
+            delayed_fallback_deadline,
+        );
         let elapsed = terminal
             .rsplit_once("stage=run_standalone_help_preflight; elapsed_ms=")
             .and_then(|(_, suffix)| suffix.split_once(')'))
@@ -3003,10 +3032,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         "two-second help preflight must finish inside the existing 2.7-second hook budget; elapsed_ms={elapsed}"
     );
     assert_eq!(
-        running
-            .desktop
-            .snapshot()
-            .unwrap()
+        desktop_snapshot::read(&running.desktop)
             .agent_lifecycle
             .iter()
             .filter(|agent| agent.provider == Provider::OpenCodeLocal)
@@ -3036,7 +3062,7 @@ fn automatic_local_opencode_tracks_exact_root_and_preserves_user_configuration()
         .unwrap();
     let help_deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let terminal = terminal_output_for(&running.desktop, terminal_session);
+        let terminal = terminal_output_for_until(&running.desktop, terminal_session, help_deadline);
         if terminal.contains("FLAGS") {
             break;
         }

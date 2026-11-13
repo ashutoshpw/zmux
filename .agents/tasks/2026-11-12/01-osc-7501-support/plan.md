@@ -106,3 +106,8 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/native-lease-diagnostic.md](references/native-lease-diagnostic.md) — aggregate-only native lease assertion, retained response diagnostic and focused pass without cause claim.
 - [references/hosted-final-7a3a0a0.md](references/hosted-final-7a3a0a0.md) — Ubuntu acceptance and Darwin checkpoint socket path failures at exact source.
 - [references/checkpoint-socket-path-repair.md](references/checkpoint-socket-path-repair.md) — deterministic long-TMPDIR red/green using existing checkpoint tests and short private socket roots.
+- [references/hosted-final-c346051.md](references/hosted-final-c346051.md) — exact-head provider fixture Busy read failure and retained logs; native artifact not yet accepted.
+- [references/provider-hook-snapshot-repair.md](references/provider-hook-snapshot-repair.md) — bounded fixture snapshot reads and preserved polling deadlines across Codex/OpenCode checks.
+- [references/provider-hook-snapshot-recheck.md](references/provider-hook-snapshot-recheck.md) — independent acceptance of bounded snapshot reads and unchanged fixture contracts.
+- [references/checkpoint-final-drain-fixture-repair.md](references/checkpoint-final-drain-fixture-repair.md) — actual PTY capture before child exit and unchanged pre-retirement checkpoint contract.
+- [references/checkpoint-final-drain-fixture-recheck.md](references/checkpoint-final-drain-fixture-recheck.md) — independent fixture ordering acceptance and removed private-result assertion.

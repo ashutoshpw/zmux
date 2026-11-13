@@ -2376,11 +2376,21 @@ mod checkpoint_tests {
     use super::*;
     use std::{
         fs,
-        io::Read,
+        io::{Read, Write},
         os::fd::AsRawFd,
         os::unix::{fs::DirBuilderExt, net::UnixListener},
         path::PathBuf,
     };
+
+    const FINAL_DRAIN_OUTPUT: &[u8] =
+        b"\x1b]133;A\x07B_PROMPT_READY\r\n\x1b]7501;state=working:id=final\x07";
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FinalDrainFixtureCommand {
+        CaptureOutput,
+        LoadCheckpoint,
+        Execute,
+    }
 
     struct TestDirectory(PathBuf);
 
@@ -2425,9 +2435,10 @@ while payload:
 notice=socket.socket(socket.AF_UNIX)
 notice.connect(sys.argv[1])
 notice.sendall(b'wrote')
-notice.close()
 if sys.argv[2]=='exit':
+    notice.recv(4)
     os._exit(0)
+notice.close()
 os.read(0,1)
 "#,
         )
@@ -2446,9 +2457,11 @@ os.read(0,1)
             size: default_size(),
         };
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
-        let (start_worker, run_gate) = mpsc::sync_channel(1);
+        let (fixture_command, fixture_commands) = mpsc::sync_channel(3);
+        let (captured_output_sender, captured_output_receiver) = mpsc::sync_channel(1);
+        let (checkpoint_loaded_sender, checkpoint_loaded_receiver) = mpsc::sync_channel(1);
         let worker_thread = thread::spawn(move || {
-            let (worker, startup) = Worker::start(
+            let (mut worker, startup) = Worker::start(
                 launch,
                 Vec::new(),
                 Vec::new(),
@@ -2459,7 +2472,32 @@ os.read(0,1)
             )
             .expect("start real PTY worker");
             startup_sender.send(startup).expect("return worker startup");
-            run_gate.recv().expect("release session worker");
+            if child_exits {
+                assert_eq!(
+                    fixture_commands.recv().expect("request PTY output capture"),
+                    FinalDrainFixtureCommand::CaptureOutput
+                );
+                let captured = capture_preexisting_pty_output(&mut worker, FINAL_DRAIN_OUTPUT);
+                captured_output_sender
+                    .send(captured)
+                    .expect("return captured PTY output");
+                assert_eq!(
+                    fixture_commands
+                        .recv()
+                        .expect("request checkpoint scheduling"),
+                    FinalDrainFixtureCommand::LoadCheckpoint
+                );
+                worker
+                    .load_input()
+                    .expect("load admitted checkpoint before worker execution");
+                checkpoint_loaded_sender
+                    .send(())
+                    .expect("return checkpoint scheduling result");
+            }
+            assert_eq!(
+                fixture_commands.recv().expect("release session worker"),
+                FinalDrainFixtureCommand::Execute
+            );
             worker.execute();
         });
         let startup = startup_receiver
@@ -2481,33 +2519,74 @@ os.read(0,1)
             .read_exact(&mut notice)
             .expect("read child readiness notice");
         assert_eq!(&notice, b"wrote");
+        let process_id = startup.process_id;
+        let session_epoch = startup
+            .shared
+            .snapshot
+            .lock()
+            .expect("read initial Session snapshot")
+            .viewport
+            .program_status
+            .session_epoch;
         if child_exits {
+            fixture_command
+                .send(FinalDrainFixtureCommand::CaptureOutput)
+                .expect("capture child output before attached-child exit");
+            let captured = captured_output_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker did not capture the pre-exit PTY output");
+            assert_eq!(captured, FINAL_DRAIN_OUTPUT);
+            assert!(
+                child::observe_child(process_id, false)
+                    .expect("observe live PTY child")
+                    .is_none()
+            );
+            child_notice
+                .write_all(b"exit")
+                .expect("allow retained PTY child to exit");
             let deadline = Instant::now() + Duration::from_secs(5);
-            while child::observe_child(startup.process_id, false)
-                .expect("observe retained PTY child")
-                .is_none()
-            {
+            let exit = loop {
+                if let Some(exit) =
+                    child::observe_child(process_id, false).expect("observe retained PTY child")
+                {
+                    break exit;
+                }
                 assert!(Instant::now() < deadline, "PTY child did not exit");
                 thread::yield_now();
-            }
+            };
+            assert_eq!(exit, child::ExitObservation::Exited(0));
         }
 
-        // Hold the actual Session worker after its PTY child has written the
-        // prompt but before that worker can service an admitted checkpoint.
+        // Keep the public Session live while a checkpoint waits behind real PTY
+        // bytes and, for final drain, an already exited attached child.
         let mut session = Session {
             input,
             wake: Mutex::new(startup.wake),
             shared: startup.shared,
             worker: Some(worker_thread),
-            process_id: startup.process_id,
+            process_id,
             shutdown_policy: ShutdownPolicy::Kill,
             application_wheel_supported: true,
             open_request_registration: None,
         };
-        let checkpoint = session
+        let mut checkpoint = session
             .request_program_status_checkpoint(Instant::now() + Duration::from_secs(5))
             .expect("admit public checkpoint request");
-        start_worker.send(()).expect("start session worker");
+        if child_exits {
+            fixture_command
+                .send(FinalDrainFixtureCommand::LoadCheckpoint)
+                .expect("schedule checkpoint after attached-child exit");
+            checkpoint_loaded_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker did not admit the pending checkpoint");
+            assert!(
+                checkpoint.try_recv().is_none(),
+                "checkpoint was serviced before the held worker executed"
+            );
+        }
+        fixture_command
+            .send(FinalDrainFixtureCommand::Execute)
+            .expect("start session worker");
 
         let snapshot = checkpoint
             .receiver
@@ -2516,6 +2595,10 @@ os.read(0,1)
             .expect("checkpoint failed");
         assert!(snapshot.bytes_read > 0);
         assert!(snapshot.viewport.contents.contains("B_PROMPT_READY"));
+        assert_eq!(
+            snapshot.viewport.program_status.session_epoch,
+            session_epoch
+        );
         assert_eq!(snapshot.viewport.program_status.command_epoch.0, 1);
         assert_eq!(snapshot.state, State::Running);
         assert!(
@@ -2529,7 +2612,24 @@ os.read(0,1)
                         && record.state == zmux_program_status::State::Working
                 })
         );
+        assert!(
+            snapshot
+                .viewport
+                .program_status
+                .transitions
+                .iter()
+                .any(|event| {
+                    event.id.as_ref() == "final"
+                        && event.cause == zmux_program_status::TransitionCause::Report
+                        && event.command_epoch.0 == 1
+                        && event.after_record.as_ref().is_some_and(|record| {
+                            record.state == zmux_program_status::State::Working
+                        })
+                }),
+            "checkpoint did not retain the parsed working transition"
+        );
         if child_exits {
+            assert_eq!(snapshot.bytes_read, FINAL_DRAIN_OUTPUT.len() as u64);
             let deadline = Instant::now() + Duration::from_secs(5);
             let final_snapshot = loop {
                 match session.snapshot() {
@@ -2543,6 +2643,13 @@ os.read(0,1)
                 );
                 thread::yield_now();
             };
+            assert_eq!(final_snapshot.exit_code, Some(0));
+            assert_eq!(final_snapshot.bytes_read, FINAL_DRAIN_OUTPUT.len() as u64);
+            assert_eq!(
+                final_snapshot.viewport.program_status.session_epoch,
+                session_epoch
+            );
+            assert_eq!(final_snapshot.viewport.program_status.command_epoch.0, 1);
             assert!(final_snapshot.viewport.program_status.records.is_empty());
             assert!(
                 final_snapshot
@@ -2553,6 +2660,7 @@ os.read(0,1)
                     .any(|event| {
                         event.id.as_ref() == "final"
                             && event.cause == zmux_program_status::TransitionCause::ChildExit
+                            && event.command_epoch.0 == 1
                     })
             );
         }
@@ -2560,5 +2668,45 @@ os.read(0,1)
         session
             .shutdown(Duration::from_secs(3))
             .expect("stop and join checkpoint worker");
+    }
+
+    fn capture_preexisting_pty_output(worker: &mut Worker, expected: &[u8]) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut captured = Vec::with_capacity(expected.len());
+        while captured.len() < expected.len() {
+            let remaining = expected.len() - captured.len();
+            let mut ready = [pollfd {
+                fd: worker
+                    .io
+                    .as_ref()
+                    .expect("active PTY I/O")
+                    .as_raw_file_descriptor(),
+                events: POLLIN,
+                revents: 0,
+            }];
+            assert_eq!(
+                poll(
+                    &mut ready,
+                    Some(deadline.saturating_duration_since(Instant::now()))
+                )
+                .expect("wait for child PTY output"),
+                1,
+                "child did not produce its complete PTY payload before the fixture deadline"
+            );
+            let mut buffer = vec![0; remaining.min(IO_CHUNK_BYTES)];
+            let count = worker
+                .io
+                .as_mut()
+                .expect("active PTY I/O")
+                .read(&mut buffer)
+                .expect("read child PTY output before attached-child exit");
+            assert_ne!(count, 0, "PTY closed before the child exited");
+            captured.extend_from_slice(&buffer[..count]);
+            worker.bytes_read += count as u64;
+            worker
+                .defer_output(&buffer[..count])
+                .expect("retain real PTY output in the worker ordering buffer");
+        }
+        captured
     }
 }

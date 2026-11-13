@@ -6,26 +6,37 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `7a3a0a06f8c330b20db916a8f0e45d5481bf98d8`.
-  Complete local `scripts/check` passed **763/0/7** in 262.13 seconds,
-  including strict Clippy, licenses, C bridge and native lease gates. Source
-  fingerprints remained unchanged and unrelated work was preserved.
-- All source slices and the latest transfer retirement correction have passed
-  their scoped independent reviews. Early cancellation binds exact session and
-  launch generation and preserves preexisting terminal upload outcomes. Small
-  fixture read/publication waits retain their original deadlines and assertions.
-- Ghostty linkage [43349584656](https://github.com/ashutoshpw/zmux/actions/runs/43349584656)
-  passed ARM engine 4/4, Program Status 1/1, Session 4/4, and linked real-PTY
-  Session 1/1. Both Apple targets compiled/linked. All 229 captured source
-  inputs still match the latest source; reviewed library bytes are unchanged.
-  Intel runtime, native-host/AppKit linkage and physical hardware are not claimed.
-- Fresh [Foundation 43358543419](https://github.com/ashutoshpw/zmux/actions/runs/43358543419)
-  and [universal macOS 43358543431](https://github.com/ashutoshpw/zmux/actions/runs/43358543431)
-  are queued/running at the latest source. Read-only final artifact verification
-  is active. Earlier failed runs are historical diagnostics, not acceptance.
-- No accepted app download exists yet. Completion requires the final universal
-  workflow, downloaded artifact hash/source/architecture/minimum-OS/signature
-  checks, native Programs receipts, and inspection of its packaged screenshot.
+- Latest pushed source: `c34605102c19380315c3b262686d26f7d57c6c1b`.
+  The new provider snapshot and final-drain fixture source passed complete
+  local `scripts/check`: **763/0/7** in 282.56 seconds, with unchanged source
+  fingerprints and preserved unrelated work. These repairs are not pushed yet.
+- Hosted Foundation `43360964670` failed when a provider fixture unwrapped
+  the supported transient snapshot result `Busy`; eleven poisoned-lock
+  failures followed. A test-only repair now reuses the shared bounded reader,
+  preserves existing polling deadlines, and passes **15/0/2** locally.
+  Independent review accepted with no findings. This is not evidence of a production
+  OpenCode setup failure.
+- Universal macOS `43360964642` failed at the final-drain checkpoint fixture's
+  `snapshot.bytes_read > 0` assertion. The fixture closes its child PTY before
+  the held worker reads. The fixture now captures exact real PTY bytes into
+  the existing deferred buffer before allowing child exit, then admits its
+  checkpoint after observed exit. Focused and aggregate checks passed;
+  independent review accepted. Parent removed its non-blocking P3 private
+  dirty-result assertion; final aggregate recheck passed **763/0/7**. The possible Darwin unread-output behavior
+  remains a hypothesis.
+- Ghostty linkage `43360978497` is accepted at `c346051`: downloaded artifact
+  `14007902860`, 22,998,362 bytes, SHA-256
+  `616532a3d83541d36fa447498f590b42582e1ac4a1caabbcdaccbdb1ad509ea0`;
+  all 229 source pins match. ARM engine **4/4**, linked 7501 **1/1**,
+  Session **4/4**, linked real-PTY 7501 **1/1**, and both Apple compile/link
+  phases passed. Intel execution and native host linkage were not requested.
+- Both fixture reviews and final aggregate checks passed. Commit/push the
+  validated scoped fixtures and refresh hosted Foundation, universal
+  macOS and retained Ghostty linkage at the new source. Engine libraries
+  need no rebuild.
+- No accepted app download exists yet. Final packaging, hashes/source,
+  arm64/x86_64, minimum OS, signature, native Programs receipts and actual
+  packaged screenshot inspection remain required.
 
 ## Earlier overall acceptance notes
 
@@ -702,3 +713,39 @@ dispatch or app manipulation was performed.
   rerun alongside the next native build without rebuilding engine libraries.
 
 - The complete short-socket fixture aggregate passed **763/0/7** in 285.75 seconds, with stable source fingerprints and matching unrelated preservation hashes. It is ready for the scoped fixture commit and exact-source native retries.
+
+## Provider fixture snapshot publication repair
+
+- At `c346051`, Foundation macOS failed the provider fixture's
+  `wait_local_provider` reader on a legitimate Busy snapshot, followed by
+  poisoned-lock cascades. This is not evidence of a failed OpenCode setup.
+- A bounded Luna test-only slice now replaces raw/unreliable snapshot reads
+  within that fixture with the existing bounded reader, preserving each
+  predicate's absolute deadline and all commands/assertions. No production
+  or timeout change is authorized by this repair.
+- The current universal run was still in progress at the latest check. Ghostty
+  linkage reported success; its full receipt/count verification remains pending
+  in the fail-fast artifact pass. No final app download has been accepted.
+
+- Parent completed fresh `c346051` Ghostty artifact verification: artifact
+  `14007902860`, 22,998,362 bytes, SHA-256
+  `616532a3d83541d36fa447498f590b42582e1ac4a1caabbcdaccbdb1ad509ea0`;
+  API hash/size, bounded extraction/CRC and all 229 Git source pins match.
+  ARM engine 4 + Program Status 1 + Session 4 + real-PTY Program Status 1
+  executed and passed. Both Apple targets compiled/linked. Source aliases
+  in receipt paths were normalized and constrained before Git blob lookup.
+  This is accepted engine/Session evidence, separate from packaged app acceptance.
+
+## Remaining final-drain fixture handshake at `c346051`
+
+- Provider fixture bounded-read slice is complete: 15/0/2, formatting and scoped
+  strict Clippy pass. Parent inspected the mechanical read substitutions; a
+  separate narrow review is running. No production change is included.
+- Universal macOS stopped at the final-drain checkpoint fixture with zero bytes
+  read after its attached child exited before the held worker's first PTY read.
+  A bounded test-only handshake investigation/repair is active, preserving the
+  attached-child exit and pre-retirement checkpoint assertions. Darwin PTY
+  output retention is a hypothesis to verify; no production defect is assumed.
+- No full check runs while that cfg(test) source writer is active. Native app
+  package and download remain unproduced; refreshed Ghostty acceptance is
+  independently verified and complete.
