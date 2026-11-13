@@ -149,6 +149,8 @@ pub enum State {
 pub struct Snapshot {
     pub state: State,
     pub viewport: Viewport,
+    /// PTY output bytes physically read so far. This can lead the viewport
+    /// while output waits behind earlier input and terminal parsing is deferred.
     pub bytes_read: u64,
     pub exit_code: Option<u32>,
     pub failure: Option<String>,
@@ -1608,6 +1610,15 @@ impl Worker {
                 self.publish(State::Running, None, true)?;
                 dirty = false;
                 published = Instant::now();
+            } else if self.close_deadline.is_none()
+                && self.causal_reply.is_none()
+                && self.deferred_ordering_deadline().is_some()
+                && published.elapsed() >= FRAME_INTERVAL
+            {
+                // Keep physical PTY-read progress observable at the existing
+                // frame cadence without refreshing or committing the engine.
+                self.publish_deferred_read_progress()?;
+                published = Instant::now();
             }
             if self.close_deadline.is_none()
                 && self.causal_reply.is_none()
@@ -2312,6 +2323,26 @@ impl Worker {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn publish_deferred_read_progress(&mut self) -> Result<(), SessionError> {
+        let mut slot = self
+            .shared
+            .snapshot
+            .lock()
+            .map_err(|_| SessionError::Failure("session snapshot lock poisoned".into()))?;
+        if self.bytes_read <= slot.bytes_read {
+            return Ok(());
+        }
+        let committed = &**slot;
+        *slot = Arc::new(Snapshot {
+            state: committed.state,
+            viewport: committed.viewport.clone(),
+            bytes_read: self.bytes_read,
+            exit_code: committed.exit_code,
+            failure: committed.failure.clone(),
+        });
         Ok(())
     }
 }

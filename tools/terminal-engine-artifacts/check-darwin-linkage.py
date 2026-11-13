@@ -40,7 +40,7 @@ SESSION_PROGRAM_STATUS_TEST_NAME = (
 SESSION_TEST_NAMES = {
     "actual_child_receives_engine_replies_raw_input_and_kernel_resize_through_session",
     "blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suffix_first",
-    "blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued_input",
+    "blocked_ordering_deadline_or_close_aborts_without_publishing_or_replaying_queued_input",
     "engine_constructor_failure_precedes_child_launch_and_releases_resource_on_worker",
 }
 # Cargo.lock pins darwin-libproc-sys 0.2.0 (build.rs links proc) and libc 0.2.190

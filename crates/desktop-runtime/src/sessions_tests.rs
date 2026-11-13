@@ -360,6 +360,8 @@ fn execute_lifecycle_on_worker(
 
 #[test]
 fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
+    const BLOCKED_INPUT_CHUNKS: usize = 12;
+    let blocked_input_bytes = BLOCKED_INPUT_CHUNKS * zmux_session_runtime::INPUT_CHUNK_BYTES;
     let directory = Directory::new();
     let mut worker = worker(&directory);
     let model = worker.model.snapshot();
@@ -369,7 +371,18 @@ fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
         program: "/bin/sh".into(),
         args: vec![
             "-c".into(),
-            r#"stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read -r line; printf 'PROVIDER_STATE_CHECKPOINT\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_1\n'; sleep 2; cat >/dev/null & reader=$!; sleep 0.2; kill "$reader"; wait "$reader" 2>/dev/null; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_1\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_2\n'; sleep 1; cat >/dev/null & reader=$!; sleep 0.2; kill "$reader"; wait "$reader" 2>/dev/null; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_2\n'; IFS= read -r line"#.into(),
+            r#"drain_input() {
+    python3 -c 'import os, sys
+remaining = int(sys.argv[1])
+while remaining:
+    chunk = os.read(0, min(4096, remaining))
+    if not chunk:
+        raise EOFError("PTY input closed during exact drain")
+    remaining -= len(chunk)' "$1"
+}
+stty -echo; printf '\033]133;A\007'; printf 'PROVIDER_STATE_READY\n'; IFS= read -r line; printf 'PROVIDER_STATE_CHECKPOINT\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_1\n'; sleep 2; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_1\n'; IFS= read -r line; stty raw -echo; printf 'PROVIDER_STATE_DRAIN_HOLD_2\n'; sleep 1; drain_input "$1" || exit 1; stty icanon -echo; printf 'PROVIDER_STATE_DRAINED_2\n'; IFS= read -r line"#.into(),
+            "provider-state-fixture".into(),
+            blocked_input_bytes.to_string(),
         ],
         cwd: None,
         size: Size { rows: 24, cols: 80 },
@@ -636,7 +649,7 @@ fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
         .unwrap();
     wait_for_live_snapshot(&worker, "PROVIDER_STATE_DRAIN_HOLD_1");
     let blocked_input = vec![b'x'; zmux_session_runtime::INPUT_CHUNK_BYTES];
-    for _ in 0..12 {
+    for _ in 0..BLOCKED_INPUT_CHUNKS {
         worker
             .live_session(session_id)
             .unwrap()
@@ -795,11 +808,11 @@ fn provider_observation_and_registration_use_deadlined_live_checkpoints() {
         .unwrap();
     wait_for_desktop_output("PROVIDER_STATE_DRAIN_HOLD_2");
     let blocked_text = "x".repeat(zmux_session_runtime::INPUT_CHUNK_BYTES);
-    for index in 0..12 {
+    for index in 0..BLOCKED_INPUT_CHUNKS {
         desktop
             .submit(Request {
                 version: 1,
-                request_id: 100 + index,
+                request_id: 100 + index as u64,
                 payload: Command::Input {
                     session_id,
                     text: blocked_text.clone(),

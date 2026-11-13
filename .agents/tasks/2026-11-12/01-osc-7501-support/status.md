@@ -6,8 +6,8 @@
 
 ## Current delivery gates
 
-- Latest pushed source: `9048d943eea63ff18218f0ba1b0dbfe158810ccf`.
-  The final CLI/Desktop repair is ready for a cohesive commit. Its full portable
+- Latest pushed source: `b3334d269e1f0cac20a0d4886421d2a43667e155`.
+  The final CLI/Desktop repair is committed and pushed. Its full portable
   `scripts/check` passed **759/0/7** in 277.19 seconds, including formatting,
   strict Clippy, license inventory and bridge ABI. Source fingerprints stayed
   unchanged and unrelated-file preservation hashes matched.
@@ -27,7 +27,10 @@
   with explicit ambiguity handling. A fresh final-source universal build and
   downloaded artifact verification remain required. No accepted app download
   exists for this feature yet.
-- Next: commit/push scoped runtime repair, verify fresh universal build, accept
+- Fresh final-runtime workflows: [Foundation 43337548294](https://github.com/ashutoshpw/zmux/actions/runs/43337548294)
+  and [universal macOS 43337548403](https://github.com/ashutoshpw/zmux/actions/runs/43337548403).
+  Both are executing against `b3334d2`; their outcomes remain pending.
+- Next: verify fresh universal build, accept
   Session backpressure diagnosis and complete hosted linkage, then verify final
   ZIP/source/architectures/minimum OS/signatures and packaged Programs evidence.
 
@@ -507,3 +510,39 @@ dispatch or app manipulation was performed.
   Bounded read-only diagnosis is active; actual logs/receipt are retained at
   `/tmp/zmux-osc7501-linkage-43335306931`. This is partial evidence, not linkage
   or application acceptance.
+
+## Darwin fixture portability repairs
+
+- Foundation `43337548294`: Linux passed. macOS reached 135 passing Desktop
+  tests, then failed the new real-PTY fixture waiting for its second drain-hold
+  marker. The fixture uses a 200 ms cat-and-kill drain; a bounded Luna repair
+  now owns exact-byte draining and explicit phase handshakes without changing
+  production deadlines, assertions or lifecycle coverage.
+- Accepted linked Session diagnosis: the Darwin capacity probe accepted only
+  1,022 bytes before blocking. Deferred query output never published the byte
+  counter the suffix fixture awaited; the timeout fixture expected a reply
+  deadline instead of the earlier deferred-ordering deadline, and prefix length
+  omitted other admitted chunks. Separate Luna repair owns Session progress
+  observation and fixture corrections while retaining committed viewports,
+  ordering, abort and no-replay invariants.
+- The current universal workflow remains separately in progress. Neither these
+  diagnostics nor the successful ARM engine tests constitute app acceptance.
+
+## Completed fixture repair slices awaiting aggregate gates
+
+- Desktop foreground exact-count drain passes both focused PTY tests and strict
+  Clippy. The current macOS build failed at the same old second-marker fixture
+  barrier as Foundation; no additional primary failure was reported.
+- Session deferred reads now advance the existing physical byte statistic at
+  snapshot cadence while preserving committed content/status/state. Linked
+  fixtures wait for all query bytes while Running, count all admitted input,
+  and assert the actual deferred ordering timeout. Default Session suite
+  passes 44/0/2; optional linked target selects zero tests locally.
+- Parent updated the hosted exact-executed-test-set guard for the renamed
+  ordering-deadline test. Artifact policies and candidate preflight pass.
+- Separate combined Luna review and fresh stable fullcheck are running; native
+  retry and final app delivery remain pending.
+
+- Combined Darwin repair full check passed **759/0/7** in 286.36 seconds with unchanged runtime/tooling fingerprints and matching unrelated preservation hashes. Final separate source review remains the commit/push gate; native retries and universal artifact acceptance are pending.
+
+- Final Darwin fixture/progress source review accepted the scoped repair with no blocking defect. Its low-severity abort test limitation is retained in the review: aggregate accepted bytes and rejection after termination do not independently prove a partial pending receipt or child-observed no replay. Successful sibling coverage observes exact child byte ordering. Native acceptance remains a separate gate.

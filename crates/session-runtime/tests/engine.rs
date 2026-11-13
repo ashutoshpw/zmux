@@ -8,8 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 use zmux_session_runtime::{
-    EngineKind, EngineOptions, GhosttyLimits, InputReceipt, InputWriteStatus, Launch, Session,
-    SessionError, ShutdownPolicy, Snapshot, State,
+    EngineKind, EngineOptions, GhosttyLimits, INPUT_CHUNK_BYTES, InputReceipt, InputWriteStatus,
+    Launch, Session, SessionError, ShutdownPolicy, Snapshot, State,
 };
 use zmux_terminal_adapter::{Size, Wheel};
 
@@ -115,6 +115,31 @@ fn receipt(receipt: &mut InputReceipt) -> zmux_session_runtime::InputWriteResult
     }
 }
 
+fn assert_read_progress_keeps_committed_snapshot(before: &Snapshot, progress: &Snapshot) {
+    assert_eq!(progress.state, before.state);
+    assert_eq!(progress.exit_code, before.exit_code);
+    assert_eq!(progress.failure, before.failure);
+    assert_eq!(
+        progress.viewport.viewport_generation,
+        before.viewport.viewport_generation
+    );
+    assert_eq!(progress.viewport.size, before.viewport.size);
+    assert_eq!(progress.viewport.title, before.viewport.title);
+    assert_eq!(progress.viewport.contents, before.viewport.contents);
+    assert_eq!(
+        progress.viewport.application_cursor,
+        before.viewport.application_cursor
+    );
+    assert_eq!(
+        progress.viewport.bracketed_paste,
+        before.viewport.bracketed_paste
+    );
+    assert_eq!(
+        progress.viewport.program_status,
+        before.viewport.program_status
+    );
+}
+
 #[test]
 fn actual_child_receives_engine_replies_raw_input_and_kernel_resize_through_session() {
     let fixture = Fixture::new();
@@ -173,7 +198,8 @@ def mark(name,value):
     p=root/(name+'.tmp');p.write_text(value);p.replace(root/name)
 os.write(1,b'GOOD\x1b]2;published\x07')
 while not (root/'query').exists():time.sleep(.002)
-os.write(1,b'\x1b[?1h\x1b[?2004h\x1b[6n\x1b]2;candidate\x07');mark('query-sent','sent')
+query=b'\x1b[?1h\x1b[?2004h\x1b[6n\x1b]2;candidate\x07'
+os.write(1,query);mark('query-sent',str(len(query)))
 while not (root/'release').exists():
     if (root/'check-size').exists() and not (root/'old-size').exists():
         size=struct.unpack('HHHH',fcntl.ioctl(0,0x5413 if sys.platform!='darwin' else 0x40087468,b'\0'*8))[:2]
@@ -197,9 +223,10 @@ fn block_input(session: &Session, reserved_events: usize) -> (usize, Vec<InputRe
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut receipts = Vec::new();
     while receipts.len() < 16 - reserved_events {
-        match session
-            .send_input_with_receipt(&[b'p'; 4096], Instant::now() + Duration::from_secs(20))
-        {
+        match session.send_input_with_receipt(
+            &[b'p'; INPUT_CHUNK_BYTES],
+            Instant::now() + Duration::from_secs(20),
+        ) {
             Ok(receipt) => receipts.push(receipt),
             Err(SessionError::QueueFull) => thread::sleep(Duration::from_millis(2)),
             Err(error) => panic!("input: {error}"),
@@ -216,8 +243,8 @@ fn block_input(session: &Session, reserved_events: usize) -> (usize, Vec<InputRe
                 && let Ok(result) = receipt.try_recv()
             {
                 assert_eq!(result.status, InputWriteStatus::Complete);
-                assert_eq!(result.bytes_written, 4096);
-                assert_eq!(result.total_bytes, 4096);
+                assert_eq!(result.bytes_written, INPUT_CHUNK_BYTES);
+                assert_eq!(result.total_bytes, INPUT_CHUNK_BYTES);
                 finished[index] = true;
             }
         }
@@ -294,17 +321,20 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
     // Reserve three queue slots for semantic key, whole paste and trailing raw
     // bytes. Real physical PTY backpressure is still independently required.
     let (completed, mut receipts) = block_input(&session, 3);
+    let admitted_chunks = completed + receipts.len();
     fs::write(
         fixture.0.join("expected-prefix"),
-        ((completed + 1) * 4096).to_string(),
+        (admitted_chunks * INPUT_CHUNK_BYTES).to_string(),
     )
     .unwrap();
     fixture.mark("query");
-    fixture.wait_file("query-sent");
-    let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);
+    let query_bytes = fixture.wait_file("query-sent").parse::<u64>().unwrap();
+    let staged = wait(&session, |s| {
+        s.state == State::Running && s.bytes_read >= before.bytes_read + query_bytes
+    });
+    assert_read_progress_keeps_committed_snapshot(&before, &staged);
     assert_eq!(staged.viewport.title, "published");
     assert_eq!(staged.viewport.contents, "GOOD");
-    assert!(!staged.viewport.application_cursor && !staged.viewport.bracketed_paste);
     session.resize(Size { rows: 5, cols: 20 }).unwrap();
     fixture.mark("check-size");
     assert_eq!(fixture.wait_file("old-size"), "(8, 60)");
@@ -339,7 +369,7 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
 }
 
 #[test]
-fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued_input() {
+fn blocked_ordering_deadline_or_close_aborts_without_publishing_or_replaying_queued_input() {
     for cancel in [false, true] {
         let fixture = Fixture::new();
         let mut session = fixture.session(
@@ -353,9 +383,11 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
         let before = wait(&session, |s| s.viewport.title == "published");
         let (completed, mut receipts) = block_input(&session, 0);
         fixture.mark("query");
-        fixture.wait_file("query-sent");
-        let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);
-        assert_eq!(staged.viewport.title, "published");
+        let query_bytes = fixture.wait_file("query-sent").parse::<u64>().unwrap();
+        let staged = wait(&session, |s| {
+            s.state == State::Running && s.bytes_read >= before.bytes_read + query_bytes
+        });
+        assert_read_progress_keeps_committed_snapshot(&before, &staged);
         if cancel {
             session
                 .request_close_until(Instant::now() + Duration::from_secs(3))
@@ -368,7 +400,7 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
                     .failure
                     .as_deref()
                     .unwrap()
-                    .contains("terminal causal reply deadline"),
+                    .contains("causal PTY ordering deadline"),
                 "unexpected Session failure: {:?}",
                 failed.failure
             );
@@ -385,8 +417,12 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
         );
         assert_eq!(last.viewport.title, "published");
         assert_eq!(last.viewport.contents, "GOOD");
+        assert_eq!(
+            last.state,
+            if cancel { State::Closed } else { State::Failed }
+        );
         let results: Vec<_> = receipts.iter_mut().map(receipt).collect();
-        let accepted_prefix = completed * 4096
+        let accepted_prefix = completed * INPUT_CHUNK_BYTES
             + results
                 .iter()
                 .map(|result| result.bytes_written)

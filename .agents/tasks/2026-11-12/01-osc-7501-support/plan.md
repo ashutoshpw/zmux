@@ -88,3 +88,7 @@ explicit single-source notification policy and never use text matching to dedupl
 - [references/claude-checkpoint-event-repair.md](references/claude-checkpoint-event-repair.md) — receipt-backed Event deadlines, unknown-outcome fallback policy and production-owner regressions.
 - [references/claude-checkpoint-event-recheck.md](references/claude-checkpoint-event-recheck.md) — independent acceptance of deadline/queue changes and two response-classification findings.
 - [references/claude-receipt-classification-repair.md](references/claude-receipt-classification-repair.md) — parent resolution, malformed/post-apply transport regressions and proof limits.
+- [references/ghostty-session-linkage-diagnosis.md](references/ghostty-session-linkage-diagnosis.md) — Darwin PTY capacity, deferred-output publication barrier and prefix-accounting diagnosis.
+- [references/desktop-checkpoint-fixture-repair.md](references/desktop-checkpoint-fixture-repair.md) — foreground exact-byte PTY drain, controlled incomplete-drain evidence and focused checks.
+- [references/ghostty-session-linkage-repair.md](references/ghostty-session-linkage-repair.md) — deferred physical-read progress and corrected linked PTY ordering fixtures with local proof limits.
+- [references/darwin-pty-repairs-recheck.md](references/darwin-pty-repairs-recheck.md) — independent source acceptance, cadence/cache consistency and abort-proof limitation.
